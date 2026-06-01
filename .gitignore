@@ -1,0 +1,55 @@
+# Environment and secrets
+.env
+.env.*
+*.env
+.env.local
+*.secret
+secrets/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Next
+node_modules/
+.next/
+out/
+
+# Build artifacts
+dist/
+build/
+
+# Runtime data and logs
+logs/
+*.log
+data/
+object-storage/
+backups/
+
+# ML model artifacts
+*.pth
+*.pt
+*.onnx
+*.ckpt
+*.safetensors
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Git / local overrides
+**/.git/
+*.local.yml
+docker-compose.override.yml
+docker-compose.*.override.yml
+
+# Tool caches
+.cache/

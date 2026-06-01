@@ -1,0 +1,66 @@
+# Host Nginx reverse proxy template for MedOrion.
+# Replace medorion.example.com and TLS certificate paths before enabling.
+# Keep upstream services bound to 127.0.0.1 unless public exposure is approved.
+
+upstream medorion_frontend {
+    server 127.0.0.1:8080;
+}
+
+upstream medorion_backend {
+    server 127.0.0.1:8000;
+}
+
+upstream medorion_minio_console {
+    server 127.0.0.1:9001;
+}
+
+server {
+    listen 80;
+    server_name medorion.example.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name medorion.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/medorion.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/medorion.example.com/privkey.pem;
+
+    client_max_body_size 1024m;
+
+    access_log /srv/medorion/logs/nginx/access.log;
+    error_log /srv/medorion/logs/nginx/error.log warn;
+
+    location /api/ {
+        proxy_pass http://medorion_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+
+    location /minio/ {
+        proxy_pass http://medorion_minio_console/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://medorion_frontend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
