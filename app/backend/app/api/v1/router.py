@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.modules.assets.router import router as assets_router
+from app.modules.auth.router import router as auth_router
 from app.modules.cases.router import router as cases_router
 from app.modules.clinical.router import router as clinical_router
 from app.modules.feedback.router import router as feedback_router
@@ -13,6 +14,7 @@ from app.modules.traces.router import router as traces_router
 
 api_router = APIRouter()
 
+api_router.include_router(auth_router)
 api_router.include_router(patients_router, prefix='/patients', tags=['patients'])
 api_router.include_router(cases_router, prefix='/cases', tags=['cases'])
 api_router.include_router(assets_router, tags=['case-inputs'])

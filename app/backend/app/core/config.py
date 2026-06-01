@@ -16,5 +16,11 @@ class Settings(BaseSettings):
     model_service_url: str = 'http://127.0.0.1:8100'
     log_level: str = 'INFO'
 
+    jwt_secret_key: str = 'CHANGE_ME_stage18_jwt_secret'
+    jwt_algorithm: str = 'HS256'
+    jwt_access_token_expire_minutes: int = 15
+    jwt_refresh_token_expire_days: int = 7
+    password_hash_algorithm: str = 'argon2id'
+
 
 settings = Settings()

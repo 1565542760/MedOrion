@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -408,3 +408,38 @@ class QualityReview(Base, TimestampMixin):
     resolved_by_type: Mapped[TraceActorType | None] = mapped_column(Enum(TraceActorType))
     resolved_by_id: Mapped[str | None] = mapped_column(String(128))
     resolved_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+
+
+class User(Base, TimestampMixin):
+    __tablename__ = 'users'
+    __table_args__ = (
+        Index('ix_users_username', 'username'),
+        Index('ix_users_email', 'email'),
+        CheckConstraint(
+            "role IN ('doctor', 'admin', 'model_reviewer', 'qa_reviewer', 'super_admin')",
+            name='ck_users_role_valid',
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    username: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    email: Mapped[str | None] = mapped_column(String(256), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default='doctor')
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class RefreshToken(Base):
+    __tablename__ = 'refresh_tokens'
+    __table_args__ = (
+        Index('ix_refresh_tokens_user_expires', 'user_id', 'expires_at'),
+        Index('ix_refresh_tokens_token_hash', 'token_hash'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('users.id'), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
