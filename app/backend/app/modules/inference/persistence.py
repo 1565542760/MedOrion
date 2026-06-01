@@ -19,9 +19,8 @@ def ensure_stub_case(db: Session, case_no: str, patient_token: str | None) -> tu
     if row:
         return row.id, row.patient_id
 
-    row = db.execute(text("select id::text as id, patient_id::text as patient_id from cases limit 1")).first()
-    if row:
-        return row.id, row.patient_id
+    if case_no != 'case-001':
+        raise RuntimeError('stub_case_not_found')
 
     patient_id = str(uuid.uuid4())
     case_id = str(uuid.uuid4())
@@ -86,6 +85,9 @@ def write_success_bundle(
     edge_id = str(uuid.uuid4())
     evidence_chain_id = trace_id
 
+    model_version_id = model_response.get('model_version_id')
+    invocation_id = model_response.get('model_invocation_id')
+
     db.execute(
         text(
             """
@@ -147,7 +149,7 @@ def write_success_bundle(
             'uncertainty_json': json.dumps(model_response.get('uncertainty') or {}),
             'limitations_json': json.dumps(model_response.get('limitations') or []),
             'evidence_refs_json': json.dumps([{'node_id': model_node_id, 'node_type': 'model_output'}]),
-            'content_json': json.dumps({'model_service': model_response}),
+            'content_json': json.dumps({'model_service': model_response, 'runtime_stub': True}),
             'created_by_type': 'system',
         },
     )
@@ -175,10 +177,10 @@ def write_success_bundle(
             'node_type': 'model_output',
             'source_module': 'model_service',
             'source_record_type': 'model_invocation',
-            'source_record_id': model_response.get('model_invocation_id'),
+            'source_record_id': invocation_id,
             'label': 'stub_model_output',
             'summary': 'model-service stub output',
-            'payload_json': json.dumps(model_response),
+            'payload_json': json.dumps({'runtime_stub': True, 'output': model_response}),
             'confidence': (model_response.get('confidence') or {}).get('score'),
             'uncertainty_json': json.dumps(model_response.get('uncertainty') or {}),
             'status': 'active',
@@ -211,7 +213,7 @@ def write_success_bundle(
             'source_record_id': recommendation_id,
             'label': 'stub_recommendation',
             'summary': 'backend generated stub recommendation',
-            'payload_json': json.dumps({'recommendation_id': recommendation_id, 'inference_task_id': inference_task_id}),
+            'payload_json': json.dumps({'recommendation_id': recommendation_id, 'inference_task_id': inference_task_id, 'runtime_stub': True}),
             'confidence': (model_response.get('confidence') or {}).get('score'),
             'uncertainty_json': json.dumps(model_response.get('uncertainty') or {}),
             'status': 'active',
@@ -240,25 +242,92 @@ def write_success_bundle(
             'edge_type': 'supports',
             'weight': 1.0,
             'rationale': 'stub model output supports recommendation',
-            'payload_json': '{}',
+            'payload_json': json.dumps({'runtime_stub': True}),
         },
     )
 
-    for event_type, payload in [
-        ('inference_task_created', {'inference_task_id': inference_task_id}),
-        ('model_invoked', {'inference_task_id': inference_task_id}),
-        ('model_result_received', {'inference_task_id': inference_task_id, 'model_invocation_id': model_response.get('model_invocation_id')}),
-        ('recommendation_generated', {'inference_task_id': inference_task_id, 'recommendation_id': recommendation_id}),
-    ]:
+    events = [
+        (
+            'inference_task_created',
+            {
+                'inference_task_id': inference_task_id,
+                'disease_agent': disease_agent,
+                'requested_task': requested_task,
+                'runtime_stub': True,
+            },
+            'inference_task',
+            inference_task_id,
+            None,
+        ),
+        (
+            'model_selected',
+            {
+                'model_id': model_response.get('model_id'),
+                'model_version_id': model_version_id,
+                'disease_agent': disease_agent,
+                'selection_policy': model_version_policy.get('mode'),
+                'selection_reason': 'stub_default_selection',
+                'runtime_stub': True,
+            },
+            'inference_task',
+            inference_task_id,
+            None,
+        ),
+        (
+            'model_invoked',
+            {
+                'inference_task_id': inference_task_id,
+                'invocation_id': invocation_id,
+                'model_version_id': model_version_id,
+                'input_refs': ['inputs_json'],
+                'runtime_stub': True,
+            },
+            'model_invocation',
+            invocation_id,
+            None,
+        ),
+        (
+            'model_result_received',
+            {
+                'inference_task_id': inference_task_id,
+                'invocation_id': invocation_id,
+                'model_version_id': model_version_id,
+                'output_ref': model_node_id,
+                'confidence': model_response.get('confidence') or {},
+                'uncertainty': model_response.get('uncertainty') or {},
+                'status': model_response.get('status'),
+                'runtime_stub': True,
+            },
+            'model_output',
+            model_node_id,
+            None,
+        ),
+        (
+            'recommendation_generated',
+            {
+                'recommendation_id': recommendation_id,
+                'inference_task_id': inference_task_id,
+                'model_version_id': model_version_id,
+                'recommendation_version': 1,
+                'evidence_chain_id': evidence_chain_id,
+                'runtime_stub': True,
+            },
+            'recommendation',
+            recommendation_id,
+            None,
+        ),
+    ]
+
+    for event_type, payload, source_record_type, source_record_id, parent_event_id in events:
         db.execute(
             text(
                 """
                 insert into trace_events (
                   id, trace_id, case_id, patient_id, event_type, actor_type, actor_id,
-                  source_module, source_record_type, source_record_id, event_time, payload_json, severity
+                  source_module, source_record_type, source_record_id, event_time, payload_json, severity, parent_event_id
                 ) values (
                   :id, :trace_id, :case_id, :patient_id, :event_type, :actor_type, :actor_id,
-                  :source_module, :source_record_type, :source_record_id, :event_time, cast(:payload_json as jsonb), :severity
+                  :source_module, :source_record_type, :source_record_id, :event_time, cast(:payload_json as jsonb), :severity, :parent_event_id
                 )
                 """
             ),
@@ -271,11 +340,12 @@ def write_success_bundle(
                 'actor_type': 'orchestrator',
                 'actor_id': 'backend_stub',
                 'source_module': 'backend',
-                'source_record_type': 'inference',
-                'source_record_id': inference_task_id,
+                'source_record_type': source_record_type,
+                'source_record_id': source_record_id,
                 'event_time': ts,
                 'payload_json': json.dumps(payload),
                 'severity': 'info',
+                'parent_event_id': parent_event_id,
             },
         )
 
@@ -287,6 +357,7 @@ def write_success_bundle(
         'model_node_id': model_node_id,
         'recommendation_node_id': recommendation_node_id,
         'edge_id': edge_id,
+        'evidence_chain_id': evidence_chain_id,
     }
 
 
@@ -312,10 +383,10 @@ def write_failure_event(db: Session, *, trace_id: str, case_id: str, patient_id:
             'actor_type': 'orchestrator',
             'actor_id': 'backend_stub',
             'source_module': 'backend',
-            'source_record_type': 'inference',
+            'source_record_type': 'model_invocation',
             'source_record_id': None,
             'event_time': now_utc().isoformat(),
-            'payload_json': json.dumps({'status': 'failed', 'error': error_payload}),
+            'payload_json': json.dumps({'status': 'failed', 'error': error_payload, 'runtime_stub': True}),
             'severity': 'error',
         },
     )

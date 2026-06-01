@@ -45,7 +45,12 @@ def list_trace_events(trace_id: str) -> TraceEventListResponseV1:
             text(
                 """
                 select id::text as event_id, trace_id, event_type, event_time::text as event_time,
-                       actor_type::text as actor_type, source_module, payload_json
+                       actor_type::text as actor_type, source_module,
+                       severity::text as severity,
+                       parent_event_id::text as parent_event_id,
+                       source_record_type,
+                       source_record_id,
+                       payload_json
                 from trace_events
                 where trace_id = :trace_id
                 order by event_time asc
@@ -62,6 +67,10 @@ def list_trace_events(trace_id: str) -> TraceEventListResponseV1:
                 event_time=r['event_time'],
                 actor_type=r['actor_type'],
                 source_module=r['source_module'],
+                severity=r['severity'],
+                parent_event_id=r['parent_event_id'],
+                source_record_type=r['source_record_type'],
+                source_record_id=r['source_record_id'],
                 payload=r['payload_json'] or {},
             )
             for r in rows

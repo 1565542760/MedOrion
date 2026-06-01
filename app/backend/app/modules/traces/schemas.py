@@ -19,6 +19,10 @@ class TraceEventResponseV1(BaseModel):
     event_time: str
     actor_type: str
     source_module: str
+    severity: str | None = None
+    parent_event_id: str | None = None
+    source_record_type: str | None = None
+    source_record_id: str | None = None
     payload: dict = Field(default_factory=dict)
 
 
