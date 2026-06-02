@@ -1,16 +1,36 @@
-from pydantic import BaseModel, Field
+from datetime import date, datetime
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PatientCreateRequestV1(BaseModel):
-    patient_display_id: str | None = None
+    external_patient_id: str | None = None
+    display_name: str | None = None
+    name: str | None = None
+    sex: str | None = None
+    birth_date: date | None = None
+    consent_status: str = 'unknown'
+
+
+class PatientItemV1(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    patient_id: str
+    external_patient_id: str | None = None
+    display_name: str | None = None
+    sex: str | None = None
+    birth_date: date | None = None
+    consent_status: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class PatientResponseV1(BaseModel):
-    status: str = 'stub'
+    status: str = 'ok'
     route: str
-    patient_id: str | None = None
+    item: PatientItemV1
 
 
 class PatientListResponseV1(BaseModel):
-    items: list[PatientResponseV1] = Field(default_factory=list)
+    items: list[PatientItemV1] = Field(default_factory=list)
     total: int = 0

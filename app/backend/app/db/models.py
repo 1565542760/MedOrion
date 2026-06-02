@@ -45,7 +45,7 @@ class Patient(Base, TimestampMixin):
     birth_date: Mapped[Date | None] = mapped_column(Date)
     demographics_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     consent_status: Mapped[PatientConsentStatus] = mapped_column(
-        Enum(PatientConsentStatus), nullable=False, default=PatientConsentStatus.UNKNOWN
+        Enum(PatientConsentStatus, values_callable=lambda enum_cls: [item.value for item in enum_cls]), nullable=False, default=PatientConsentStatus.UNKNOWN.value
     )
 
 
@@ -57,7 +57,7 @@ class Case(Base, TimestampMixin):
     case_no: Mapped[str | None] = mapped_column(String(128), unique=True)
     disease_domain_code: Mapped[str | None] = mapped_column(String(64))
     title: Mapped[str | None] = mapped_column(String(256))
-    status: Mapped[CaseStatus] = mapped_column(Enum(CaseStatus), nullable=False, default=CaseStatus.OPEN)
+    status: Mapped[CaseStatus] = mapped_column(Enum(CaseStatus, values_callable=lambda enum_cls: [item.value for item in enum_cls]), nullable=False, default=CaseStatus.OPEN.value)
     chief_complaint: Mapped[str | None] = mapped_column(Text)
     context_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     opened_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
