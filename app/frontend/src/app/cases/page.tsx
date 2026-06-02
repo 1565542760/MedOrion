@@ -38,7 +38,7 @@ export default function CasesPage() {
     listCases()
       .then((data) => {
         const normalized = Array.isArray(data)
-          ? data.map((row: CaseRow) => ({ ...row, key: makeCaseKey(row) }))
+          ? (data as CaseRow[]).map((row) => ({ ...row, key: makeCaseKey(row) }))
           : [];
         setRows(normalized);
       })

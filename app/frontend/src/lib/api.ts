@@ -74,6 +74,21 @@ function withTraceId(traceId?: string) {
   return { headers: { 'x-trace-id': traceId } };
 }
 
+function unwrapList<T>(data: unknown): T[] {
+  if (Array.isArray(data)) return data as T[];
+  if (data && typeof data === 'object' && Array.isArray((data as { items?: T[] }).items)) {
+    return (data as { items: T[] }).items;
+  }
+  return [];
+}
+
+function unwrapItem<T>(data: unknown): T {
+  if (data && typeof data === 'object' && 'item' in (data as Record<string, unknown>)) {
+    return (data as { item: T }).item;
+  }
+  return data as T;
+}
+
 export const apiConfig = { mode: API_MODE, baseURL: API_BASE_URL };
 
 const mock = {
@@ -81,11 +96,73 @@ const mock = {
     { case_id: 'case-001', patient_id: 'patient-001', disease_task: 'CAP', status: 'in_review', trace_id: 'trace-demo' },
     { case_id: 'case-002', patient_id: 'patient-002', disease_task: 'COP', status: 'awaiting_input', trace_id: 'trace-demo-2' }
   ],
-  missingValues: [
-    { field: 'procalcitonin', reason: 'lab_absent', suggested_options: ['???', '???????', '???????'] }
+  missingQueries: [
+    {
+      query_id: 'query-demo-pending',
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      field_name: 'wbc',
+      field_label: '白细胞',
+      modality: 'lab',
+      reason: 'demo',
+      question_text: '请补充白细胞值',
+      status: 'pending',
+      trace_id: 'trace-demo',
+      policy_version: 'v1',
+      value_source: 'unknown',
+      doctor_answer_text: null,
+      doctor_answer_json: null,
+      default_strategy_code: null,
+      default_reason: null,
+      default_value_json: null,
+      created_at: '2026-06-02T00:00:00Z',
+      updated_at: '2026-06-02T00:00:00Z'
+    },
+    {
+      query_id: 'query-demo-answer',
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      field_name: 'crp',
+      field_label: 'C反应蛋白',
+      modality: 'lab',
+      reason: 'demo',
+      question_text: '请补充CRP值',
+      status: 'answered',
+      trace_id: 'trace-demo',
+      policy_version: 'v1',
+      value_source: 'doctor_provided',
+      doctor_answer_text: '11.2',
+      doctor_answer_json: { value: 11.2 },
+      default_strategy_code: null,
+      default_reason: null,
+      default_value_json: null,
+      created_at: '2026-06-02T00:00:00Z',
+      updated_at: '2026-06-02T00:00:00Z'
+    },
+    {
+      query_id: 'query-demo-default',
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      field_name: 'procalcitonin',
+      field_label: '降钙素原',
+      modality: 'lab',
+      reason: 'demo',
+      question_text: '请补充降钙素原值',
+      status: 'default_applied',
+      trace_id: 'trace-demo',
+      policy_version: 'v1',
+      value_source: 'default_applied',
+      doctor_answer_text: null,
+      doctor_answer_json: null,
+      default_strategy_code: 'demo_default',
+      default_reason: '演示默认策略',
+      default_value_json: { value: 'demo-default' },
+      created_at: '2026-06-02T00:00:00Z',
+      updated_at: '2026-06-02T00:00:00Z'
+    }
   ],
   recommendations: [
-    { recommendation_id: 'rec-001', title: '???????????', risk_score: 0.78, trace_id: 'trace-demo' }
+    { recommendation_id: 'rec-001', title: '示例推荐结果', risk_score: 0.78, trace_id: 'trace-demo' }
   ]
 };
 
@@ -116,6 +193,56 @@ export type LoginResponse = {
   refresh_token: string;
   token_type?: string;
   expires_in?: number;
+};
+
+export type MissingValueQuery = {
+  query_id: string;
+  case_id: string;
+  patient_id?: string | null;
+  field_name: string;
+  field_label?: string | null;
+  modality?: string | null;
+  reason?: string | null;
+  question_text?: string | null;
+  status?: string | null;
+  trace_id?: string | null;
+  policy_version?: string | null;
+  value_source?: string | null;
+  doctor_answer_text?: string | null;
+  doctor_answer_json?: unknown | null;
+  default_strategy_code?: string | null;
+  default_reason?: string | null;
+  default_value_json?: unknown | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type MissingValueListResponse = {
+  items: MissingValueQuery[];
+  total: number;
+};
+
+export type MissingValueCreatePayload = {
+  field_name: string;
+  field_label?: string;
+  modality?: string;
+  reason?: string;
+  question_text?: string;
+  trace_id?: string;
+  value_source?: string;
+  default_strategy_code?: string;
+  default_reason?: string;
+};
+
+export type MissingValueAnswerPayload = {
+  doctor_answer_text: string;
+  doctor_answer_json?: unknown;
+};
+
+export type MissingValueDefaultPayload = {
+  default_strategy_code: string;
+  default_reason: string;
+  default_value_json?: unknown;
 };
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
@@ -165,27 +292,117 @@ export async function getHealthReady() {
 export async function listCases(traceId?: string) {
   if (API_MODE === 'mock') return mock.cases;
   const data = (await client.get('/api/v1/cases', withTraceId(traceId))).data;
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.items)) return data.items;
-  return [];
+  return unwrapList(data);
+}
+
+export async function listMissingValueQueries(caseId: string, traceId?: string): Promise<MissingValueListResponse> {
+  if (API_MODE === 'mock') {
+    return { items: mock.missingQueries as MissingValueQuery[], total: mock.missingQueries.length };
+  }
+  const url = '/api/v1/cases/' + caseId + '/missing-values';
+  const data = (await client.get(url, withTraceId(traceId))).data;
+  const items = unwrapList<MissingValueQuery>(data);
+  const total = typeof data?.total === 'number' ? data.total : items.length;
+  return { items, total };
+}
+
+export async function createMissingValueQuery(caseId: string, payload: MissingValueCreatePayload, traceId?: string): Promise<MissingValueQuery> {
+  const url = '/api/v1/cases/' + caseId + '/missing-values';
+  if (API_MODE === 'mock') {
+    return {
+      query_id: 'query-demo-created',
+      case_id: caseId,
+      patient_id: 'patient-001',
+      field_name: payload.field_name,
+      field_label: payload.field_label || payload.field_name,
+      modality: payload.modality || 'lab',
+      reason: payload.reason || 'demo',
+      question_text: payload.question_text || '请补充缺失值',
+      status: 'pending',
+      trace_id: payload.trace_id || traceId || 'trace-demo',
+      policy_version: 'v1',
+      value_source: payload.value_source || 'unknown',
+      doctor_answer_text: null,
+      doctor_answer_json: null,
+      default_strategy_code: null,
+      default_reason: null,
+      default_value_json: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+  }
+  const data = (await client.post(url, payload, withTraceId(traceId || payload.trace_id))).data;
+  return unwrapItem<MissingValueQuery>(data);
+}
+
+export async function answerMissingValueQuery(caseId: string, queryId: string, payload: MissingValueAnswerPayload, traceId?: string): Promise<MissingValueQuery> {
+  const url = '/api/v1/cases/' + caseId + '/missing-values/' + queryId + '/answer';
+  if (API_MODE === 'mock') {
+    return {
+      query_id: queryId,
+      case_id: caseId,
+      patient_id: 'patient-001',
+      field_name: 'wbc',
+      field_label: '白细胞',
+      modality: 'lab',
+      reason: 'demo',
+      question_text: '请补充白细胞值',
+      status: 'answered',
+      trace_id: traceId || 'trace-demo',
+      policy_version: 'v1',
+      value_source: 'doctor_provided',
+      doctor_answer_text: payload.doctor_answer_text,
+      doctor_answer_json: payload.doctor_answer_json ?? { value: payload.doctor_answer_text },
+      default_strategy_code: null,
+      default_reason: null,
+      default_value_json: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+  }
+  const data = (await client.post(url, payload, withTraceId(traceId))).data;
+  return unwrapItem<MissingValueQuery>(data);
+}
+
+export async function applyDefaultMissingValueQuery(caseId: string, queryId: string, payload: MissingValueDefaultPayload, traceId?: string): Promise<MissingValueQuery> {
+  const url = '/api/v1/cases/' + caseId + '/missing-values/' + queryId + '/apply-default';
+  if (API_MODE === 'mock') {
+    return {
+      query_id: queryId,
+      case_id: caseId,
+      patient_id: 'patient-001',
+      field_name: 'crp',
+      field_label: 'C反应蛋白',
+      modality: 'lab',
+      reason: 'demo',
+      question_text: '请补充CRP值',
+      status: 'default_applied',
+      trace_id: traceId || 'trace-demo',
+      policy_version: 'v1',
+      value_source: 'default_applied',
+      doctor_answer_text: null,
+      doctor_answer_json: null,
+      default_strategy_code: payload.default_strategy_code,
+      default_reason: payload.default_reason,
+      default_value_json: payload.default_value_json || { value: 'demo-default' },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+  }
+  const data = (await client.post(url, payload, withTraceId(traceId))).data;
+  return unwrapItem<MissingValueQuery>(data);
 }
 
 export async function getMissingValues(caseId: string, traceId?: string) {
-  if (API_MODE === 'mock') return mock.missingValues;
-  const url = '/api/v1/cases/' + caseId + '/missing-values';
-  const data = (await client.get(url, withTraceId(traceId))).data;
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.items)) return data.items;
-  return [];
+  const data = await listMissingValueQueries(caseId, traceId);
+  return data.items;
 }
 
 export async function getRecommendations(caseId: string, traceId?: string) {
   if (API_MODE === 'mock') return mock.recommendations;
   const url = '/api/v1/cases/' + caseId + '/recommendations';
   const data = (await client.get(url, withTraceId(traceId))).data;
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.items)) return data.items;
-  return [];
+  return unwrapList(data);
 }
 
 export async function getTrace(traceId: string) {
