@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -151,12 +151,22 @@ class ModelRegistry(Base, TimestampMixin):
 
 class ModelVersion(Base, TimestampMixin):
     __tablename__ = 'model_versions'
+    __table_args__ = (
+        Index(
+            'uq_model_versions_one_default_per_model',
+            'model_id',
+            unique=True,
+            postgresql_where=text("approval_state = 'default'::modelapprovalstate"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     model_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('model_registry.id'), nullable=False)
     version_label: Mapped[str] = mapped_column(String(128), nullable=False)
     approval_state: Mapped[ModelApprovalState] = mapped_column(
-        Enum(ModelApprovalState), nullable=False, default=ModelApprovalState.DRAFT
+        Enum(ModelApprovalState, values_callable=lambda enum_cls: [item.value for item in enum_cls]),
+        nullable=False,
+        default=ModelApprovalState.DRAFT.value,
     )
     contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
     artifact_ref_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -164,7 +174,14 @@ class ModelVersion(Base, TimestampMixin):
     output_schema_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     metrics_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     runtime_constraints_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    approved_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    promoted_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    promoted_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    rollback_from_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('model_versions.id'))
     published_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+
 
 
 class InferenceTask(Base, TimestampMixin):

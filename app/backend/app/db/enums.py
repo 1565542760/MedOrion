@@ -171,6 +171,10 @@ class QualityErrorAttribution(StrEnum):
 
 class ModelApprovalState(StrEnum):
     DRAFT = 'draft'
+    OFFLINE_EVALUATED = 'offline_evaluated'
     APPROVED = 'approved'
+    SHADOW = 'shadow'
+    CANARY = 'canary'
+    DEFAULT = 'default'
     DEPRECATED = 'deprecated'
-    REVOKED = 'revoked'
+    ARCHIVED = 'archived'
