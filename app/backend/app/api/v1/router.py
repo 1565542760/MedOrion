@@ -9,6 +9,7 @@ from app.modules.clinical.router import router as clinical_router
 from app.modules.feedback.router import router as feedback_router
 from app.modules.inference.router import router as inference_router
 from app.modules.model_registry.router import router as model_registry_router, version_router as model_version_router
+from app.modules.orchestrations.router import router as orchestrations_router
 from app.modules.patients.router import router as patients_router
 from app.modules.quality.router import router as quality_router
 from app.modules.recommendations.router import router as recommendations_router
@@ -30,3 +31,4 @@ api_router.include_router(model_version_router, tags=['model-versions'])
 api_router.include_router(feedback_router, prefix='/feedback', tags=['feedback'])
 api_router.include_router(traces_router, tags=['traces'])
 api_router.include_router(quality_router, tags=['quality-reviews'])
+api_router.include_router(orchestrations_router, prefix='/orchestrations', tags=['orchestrations'])
