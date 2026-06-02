@@ -17,15 +17,21 @@ CAP/COP is the first-stage demonstration disease task, not the only long-term sy
 
 ## Current Stage
 
-Current stage: `Stage 11 complete: local three-service stub loop verified`
+Current stage: `Stage 30: MVP workflow skeleton through quality review completed`
 
 Completed:
 
+- Auth/RBAC skeleton.
+- Frontend login/proxy flow.
+- Formal patient/case creation.
+- Model-service stub integration.
+- Trace/evidence persistence.
+- Missing-value consultation.
+- Doctor feedback.
+- Quality review.
 - Infrastructure and runtime layout established.
 - Backend FastAPI stub, migration baseline, stub APIs, and trace/request logging fields completed.
 - Frontend doctor workstation skeleton completed with backend-mode integration.
-- Model-service stub completed.
-- Backend model-service stub adapter connected.
 - Frontend small-models page can trigger `POST /api/v1/cases/{case_id}/inference-tasks`.
 - Frontend displays `trace_id`, `task_id`, `model_invocation_id`, `model_version_id`, `confidence`, `uncertainty`, `limitations`, `evidence_refs`.
 
@@ -33,10 +39,10 @@ Not completed:
 
 - Real model inference and real model loading.
 - Full production backend business CRUD coverage.
-- Complete trace/evidence minimum persistence loop.
 - Public Nginx entry.
 - GPU inference enablement.
 - Full model lifecycle management.
+- Real-time or automatic learning.
 
 ## Repository Layout
 
@@ -113,4 +119,4 @@ This is stub-only validation and is not a medical diagnosis system.
 
 - baseline commit: `b7f3268`
 - baseline tag: `v0.1.0-foundation-stub`
-- current checkpoint: three-service stub loop complete, pending checkpoint commit
+- current checkpoint: Stage 30 MVP workflow skeleton through quality review completed

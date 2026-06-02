@@ -1,15 +1,15 @@
 # MedOrion Project Board
 
-Last updated: 2026-06-01 Asia/Shanghai
+Last updated: 2026-06-02 Asia/Shanghai
 Owner: MedOrion general architecture and scheduling thread
 
 ## Current Stage
 
-Stage 07 backend API stubs and request logging are complete. The next priority is Frontend Doctor Workbench Stage 01: initialize the frontend project and implement a mock API adapter against the local backend stubs.
+Stage 30 is now complete at the MVP workflow-skeleton level through quality review. The platform has moved beyond the initial stub-only demo loop and now includes authentication, frontend login/proxy flow, formal patient/case creation, model-service stub integration, trace/evidence persistence, missing-value consultation, doctor feedback, and quality review.
 
 ## Global Blocker
 
-Frontend project is not initialized yet. Backend API stubs are available locally at 127.0.0.1:8000, but no public Nginx route should be opened.
+No hard blocker is currently preventing continuation. The system remains stub-only and must not be treated as a real diagnosis platform.
 
 ## Backend Status
 
@@ -24,6 +24,7 @@ Frontend project is not initialized yet. Backend API stubs are available locally
 
 ## Implemented Backend Stub Groups
 
+- /api/v1/auth
 - /api/v1/patients
 - /api/v1/cases
 - /api/v1/cases/{case_id}/traces
@@ -42,11 +43,11 @@ Frontend project is not initialized yet. Backend API stubs are available locally
 
 ## Current Rule
 
-Frontend may initialize under /srv/medorion/app/frontend and use local backend stubs. Do not enable Nginx, do not expose public routes, do not start model-service, and do not perform .pth file operations.
+Frontend may initialize under `/srv/medorion/app/frontend` and use local backend stubs. Do not enable Nginx, do not expose public routes, do not start model-service beyond the stub already in use, and do not perform `.pth` file operations.
 
 ## Global File Safety Constraint
 
-If any later task needs a deep-learning .pth model file, no thread may scan, copy, move, or infer paths from other project folders. The thread must report the need to the main controller, and the main controller will ask the user for the exact file location.
+If any later task needs a deep-learning `.pth` model file, no thread may scan, copy, move, or infer paths from other project folders. The thread must report the need to the main controller, and the main controller will ask the user for the exact file location.
 
 ## Running Infra
 
@@ -57,17 +58,19 @@ If any later task needs a deep-learning .pth model file, no thread may scan, cop
 | Redis | healthy | 127.0.0.1:6379 -> 6379/tcp |
 | MinIO API | healthy | 127.0.0.1:9000 -> 9000/tcp |
 | MinIO Console | healthy | 127.0.0.1:9001 -> 9001/tcp |
+| Frontend | running | 127.0.0.1:3000 -> 3000/tcp |
+| model-service | running | 127.0.0.1:8100 -> 8100/tcp |
 
 ## Conversation Status
 
 | Conversation | Status | Current Instruction |
 | --- | --- | --- |
-| MedOrion-总架构与决策记录 | Active | Maintain source of truth, decisions, and scheduling board. |
-| MedOrion-前端医生工作台 | Active next | Initialize frontend under /srv/medorion/app/frontend and implement mock API adapter against backend stubs. |
-| MedOrion-部署与MLOps | Monitor | Keep infra healthy; do not enable Nginx or start model-service. |
-| MedOrion-后端API与数据库 | Hold | Support frontend if stub contract gaps are found; no new business logic. |
-| MedOrion-小模型与智能体编排 | Hold | Wait for frontend/backend adapter feedback. |
-| MedOrion-溯源与质控系统 | Hold | Optional later verification of trace API behavior. |
+| MedOrion-???????? | Active | Maintain source of truth, decisions, and scheduling board. |
+| MedOrion-??????? | Active next | Continue UI polish and validation around auth, case, feedback, and quality review flows. |
+| MedOrion-???MLOps | Monitor | Keep infra healthy; do not enable Nginx or public exposure. |
+| MedOrion-??API???? | Hold | Support contract gaps only; no unnecessary new business logic. |
+| MedOrion-????????? | Hold | Wait for future model registry and real model onboarding readiness. |
+| MedOrion-??????? | Hold | Optional later verification of trace and quality review behavior. |
 
 ## Next Required Return From Frontend Thread
 
@@ -78,6 +81,6 @@ If any later task needs a deep-learning .pth model file, no thread may scan, cop
 5. Backend stub endpoints consumed successfully.
 6. Whether local frontend dev server runs and on which localhost port.
 7. Confirmation Nginx remains disabled and no public exposure was added.
-8. Confirmation no model-service, training, or .pth operation occurred.
+8. Confirmation no model-service, training, or `.pth` operation occurred.
 9. Any backend stub contract gaps discovered.
 10. What should be added to SOURCE_OF_TRUTH.md or docs/decisions.

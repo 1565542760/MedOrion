@@ -27,20 +27,23 @@ Read in this order before making changes:
 
 ## Current Stage
 
-- Current stage: Stage 15 checkpoint complete
-- Latest commit: `df5d24a`
+- Current stage: Stage 30: MVP workflow skeleton through quality review completed
+- Latest commit: `09591b9`
 
 Current capabilities:
 
 - `frontend -> backend -> model-service stub -> backend -> frontend`
 - Minimal trace/evidence persistence loop is in place.
 - `model_selected` plus five-class trace event audit semantics are present.
+- Formal patient/case creation is in place.
+- Missing-value consultation, doctor feedback, and quality review flows are in place.
 
 Current system is not:
 
 - A real diagnosis system
 - A real model inference system
 - A real training system
+- A public production deployment
 
 ## Remote Server
 
@@ -122,14 +125,19 @@ http://127.0.0.1:3000
 - `case-001` stub anchor is temporary and should later be replaced by formal case creation flow.
 - model-service is stub-only.
 - Frontend lineage is MVP-level.
+- Frontend quality review UI may still need polish and deeper validation.
 - Real model lifecycle management is not in place.
 - Login/permission system is not in place.
 - Externalized database backup/restore drills are not yet completed.
+- No causal analysis module exists yet; it is reserved for future expansion.
 
 ## Recommended Next Steps
 
 - Design the minimum authentication and authorization scheme.
 - Implement formal case creation flow and replace `case-001` stub anchoring.
 - Continue with frontend UI polish.
+- Add the first round of frontend quality review integration.
 - Proceed to model registry/version lifecycle management.
+- Strengthen deployment with Nginx/HTTPS, backup restoration, and database externalization drills.
 - Real `.pth` model integration must wait for controller-approved, user-provided path input.
+- Investigate causal analysis / counterfactual reasoning only in a later stage.
