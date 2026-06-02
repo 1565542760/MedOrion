@@ -245,6 +245,52 @@ export type MissingValueDefaultPayload = {
   default_value_json?: unknown;
 };
 
+
+export type DoctorFeedbackItem = {
+  feedback_id: string;
+  case_id: string;
+  trace_id: string;
+  recommendation_id?: string | null;
+  feedback_type: string;
+  feedback_text?: string | null;
+  doctor_decision?: string | null;
+  rating?: number | null;
+  doctor_id?: string | null;
+  learning_eligible: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type DoctorFeedbackListResponse = {
+  items: DoctorFeedbackItem[];
+  total: number;
+};
+
+export type DoctorFeedbackCreatePayload = {
+  case_id: string;
+  recommendation_id: string;
+  trace_id?: string;
+  feedback_type: string;
+  feedback_text?: string;
+  doctor_decision?: string;
+  rating?: number | null;
+  learning_eligible?: boolean;
+};
+
+export type DoctorFeedbackResponse = {
+  status?: string;
+  route: string;
+  item: DoctorFeedbackItem;
+};
+
+export type TraceEventItem = {
+  event_type?: string;
+  source_record_id?: string | null;
+  payload?: {
+    recommendation_id?: string | null;
+  };
+};
+
 export async function login(username: string, password: string): Promise<LoginResponse> {
   const data = (await client.post('/api/v1/auth/login', { username, password })).data as LoginResponse;
   if (data?.access_token && data?.refresh_token) {
@@ -405,10 +451,61 @@ export async function getRecommendations(caseId: string, traceId?: string) {
   return unwrapList(data);
 }
 
+export async function listFeedback(caseId: string): Promise<DoctorFeedbackListResponse> {
+  if (API_MODE === 'mock') {
+    const items = ((mock as { feedbacks?: DoctorFeedbackItem[] }).feedbacks || []).filter((item) => item.case_id === caseId) as DoctorFeedbackItem[];
+    return { items, total: items.length };
+  }
+  const data = (await client.get('/api/v1/cases/' + caseId + '/feedback')).data;
+  const items = unwrapList<DoctorFeedbackItem>(data);
+  const total = typeof data?.total === 'number' ? data.total : items.length;
+  return { items, total };
+}
+
+export async function listFeedbackByTrace(traceId: string): Promise<DoctorFeedbackListResponse> {
+  if (API_MODE === 'mock') {
+    const items = ((mock as { feedbacks?: DoctorFeedbackItem[] }).feedbacks || []).filter((item) => item.trace_id === traceId) as DoctorFeedbackItem[];
+    return { items, total: items.length };
+  }
+  const data = (await client.get('/api/v1/feedback')).data;
+  const items = unwrapList<DoctorFeedbackItem>(data).filter((item) => item.trace_id === traceId);
+  return { items, total: items.length };
+}
+
+export async function createFeedback(payload: DoctorFeedbackCreatePayload): Promise<DoctorFeedbackItem> {
+  if (API_MODE === 'mock') {
+    const item: DoctorFeedbackItem = {
+      feedback_id: 'feedback-demo-created',
+      case_id: payload.case_id,
+      trace_id: payload.trace_id || 'trace-demo',
+      recommendation_id: payload.recommendation_id,
+      feedback_type: payload.feedback_type,
+      feedback_text: payload.feedback_text || null,
+      doctor_decision: payload.doctor_decision || null,
+      rating: payload.rating ?? null,
+      doctor_id: 'dev_doctor',
+      learning_eligible: payload.learning_eligible ?? true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    (mock as { feedbacks?: DoctorFeedbackItem[] }).feedbacks = [item, ...((mock as { feedbacks?: DoctorFeedbackItem[] }).feedbacks || [])];
+    return item;
+  }
+  const data = (await client.post('/api/v1/feedback', payload)).data as DoctorFeedbackResponse;
+  return unwrapItem<DoctorFeedbackItem>(data);
+}
+
 export async function getTrace(traceId: string) {
   if (API_MODE === 'mock') return { trace_id: traceId, status: 'completed' };
   const url = '/api/v1/traces/' + traceId;
   return (await client.get(url, withTraceId(traceId))).data;
+}
+
+export async function getTraceEvents(traceId: string) {
+  if (API_MODE === 'mock') return [];
+  const url = '/api/v1/traces/' + traceId + '/events';
+  const data = (await client.get(url, withTraceId(traceId))).data;
+  return unwrapList<TraceEventItem>(data);
 }
 
 export async function createInferenceTask(caseId: string, payload: InferenceTaskPayload, traceId?: string): Promise<InferenceTaskResponse> {
