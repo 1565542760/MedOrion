@@ -33,7 +33,7 @@ export default function DashboardPage() {
           <Button><Link href='/cases/case-001/missing-consultation'>缺失值咨询</Link></Button>
           <Button><Link href='/cases/case-001/small-models'>小模型结果</Link></Button>
           <Button><Link href='/cases/case-001/llm-explanation'>LLM解释</Link></Button>
-          <Button><Link href='/cases/case-001/lineage'>Trace/Evidence</Link></Button>
+          <Button><Link href='/cases/case-001/lineage'>查看溯源与证据链</Link></Button>
           <Button><Link href='/cases/case-001/feedback'>医生反馈</Link></Button>
         </Space>
       </Card>

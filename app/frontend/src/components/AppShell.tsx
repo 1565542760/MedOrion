@@ -2,9 +2,10 @@
 import '@ant-design/v5-patch-for-react-19';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { Layout, Menu, Space, Tag, Typography } from 'antd';
+import { usePathname, useRouter } from 'next/navigation';
+import { Button, Layout, Menu, Space, Tag, Typography } from 'antd';
 import { apiConfig } from '@/lib/api';
+import { useAuth } from '@/components/AuthProvider';
 
 const { Header, Sider, Content } = Layout;
 
@@ -17,7 +18,19 @@ const items = [
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { currentUser, isAuthenticated, logout } = useAuth();
+
+  if (pathname === '/login') {
+    return <>{children}</>;
+  }
+
   const selected = items.find((x) => pathname.startsWith(x.key))?.key || '/dashboard';
+
+  async function handleLogout() {
+    await logout();
+    router.replace('/login');
+  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -29,10 +42,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </Sider>
       <Layout>
         <Header style={{ background: '#fff', paddingInline: 20, borderBottom: '1px solid #f0f0f0' }}>
-          <Space>
-            <Tag color='blue'>Stage 01</Tag>
+          <Space wrap>
+            <Tag color='blue'>开发环境</Tag>
             <Tag color='geekblue'>API: {apiConfig.mode}</Tag>
             <Tag>Base URL: {apiConfig.baseURL}</Tag>
+            {isAuthenticated ? <Tag color='green'>当前用户：{currentUser?.display_name || currentUser?.username || '-'}</Tag> : null}
+            {isAuthenticated ? <Tag>角色：{currentUser?.role || '-'}</Tag> : null}
+            {isAuthenticated ? <Button onClick={handleLogout}>退出登录</Button> : null}
           </Space>
         </Header>
         <Content style={{ padding: 20 }}>{children}</Content>
