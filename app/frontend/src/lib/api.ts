@@ -163,8 +163,26 @@ const mock = {
   ],
   recommendations: [
     { recommendation_id: 'rec-001', title: '示例推荐结果', risk_score: 0.78, trace_id: 'trace-demo' }
+  ],
+  qualityReviews: [
+    {
+      review_id: 'review-demo-001',
+      case_id: 'case-001',
+      trace_id: 'trace-demo',
+      target_type: 'recommendation',
+      target_id: 'rec-001',
+      status: 'open',
+      attribution: 'human_feedback',
+      severity: 'medium',
+      summary: '示例质控审查',
+      related_feedback_id: 'feedback-demo-001',
+      opened_by: 'dev_doctor',
+      created_at: '2026-06-02T00:00:00Z',
+      updated_at: '2026-06-02T00:00:00Z'
+    }
   ]
 };
+
 
 export type InferenceTaskPayload = {
   patient_id: string;
@@ -281,6 +299,47 @@ export type DoctorFeedbackResponse = {
   status?: string;
   route: string;
   item: DoctorFeedbackItem;
+};
+
+export type QualityReviewItem = {
+  review_id: string;
+  case_id: string;
+  trace_id: string;
+  target_type: string;
+  target_id: string;
+  status: string;
+  attribution: string;
+  severity?: string | null;
+  summary?: string | null;
+  related_feedback_id?: string | null;
+  opened_by?: string | null;
+  actor_type?: string | null;
+  actor_id?: string | null;
+  attribution_confidence?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type QualityReviewListResponse = {
+  items: QualityReviewItem[];
+  total: number;
+};
+
+export type QualityReviewCreatePayload = {
+  case_id: string;
+  trace_id?: string;
+  target_type: string;
+  target_id: string;
+  attribution: string;
+  severity?: string;
+  summary: string;
+  related_feedback_id?: string;
+};
+
+export type QualityReviewResponse = {
+  status?: string;
+  route: string;
+  item: QualityReviewItem;
 };
 
 export type TraceEventItem = {
@@ -493,6 +552,46 @@ export async function createFeedback(payload: DoctorFeedbackCreatePayload): Prom
   }
   const data = (await client.post('/api/v1/feedback', payload)).data as DoctorFeedbackResponse;
   return unwrapItem<DoctorFeedbackItem>(data);
+}
+
+export async function listQualityReviews(caseId?: string): Promise<QualityReviewListResponse> {
+  if (API_MODE === 'mock') {
+    const items = (mock.qualityReviews as QualityReviewItem[]).filter((item) => (caseId ? item.case_id === caseId : true));
+    return { items, total: items.length };
+  }
+  const url = caseId ? '/api/v1/cases/' + caseId + '/quality-reviews' : '/api/v1/quality-reviews';
+  const data = (await client.get(url)).data;
+  const items = unwrapList<QualityReviewItem>(data);
+  const total = typeof data?.total === 'number' ? data.total : items.length;
+  return { items, total };
+}
+
+export async function listQualityReviewsByCase(caseId: string) {
+  return listQualityReviews(caseId);
+}
+
+export async function createQualityReview(payload: QualityReviewCreatePayload): Promise<QualityReviewItem> {
+  if (API_MODE === 'mock') {
+    const item: QualityReviewItem = {
+      review_id: 'review-demo-created',
+      case_id: payload.case_id,
+      trace_id: payload.trace_id || 'trace-demo',
+      target_type: payload.target_type,
+      target_id: payload.target_id,
+      status: 'open',
+      attribution: payload.attribution,
+      severity: payload.severity || 'medium',
+      summary: payload.summary,
+      related_feedback_id: payload.related_feedback_id || null,
+      opened_by: 'dev_doctor',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    (mock as { qualityReviews?: QualityReviewItem[] }).qualityReviews = [item, ...((mock as { qualityReviews?: QualityReviewItem[] }).qualityReviews || [])];
+    return item;
+  }
+  const data = (await client.post('/api/v1/quality-reviews', payload)).data as QualityReviewResponse;
+  return unwrapItem<QualityReviewItem>(data);
 }
 
 export async function getTrace(traceId: string) {

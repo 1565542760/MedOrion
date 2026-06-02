@@ -304,6 +304,17 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
             { title: 'rating', dataIndex: 'rating', width: 100, render: (v: number) => (typeof v === 'number' ? v : '-') },
             { title: 'learning_eligible', dataIndex: 'learning_eligible', width: 180, render: (v: boolean) => <Tag color={v ? 'green' : 'gold'}>{v ? T('是－受控离线学习候选') : T('否－仅归档')}</Tag> },
             { title: T('\u6765\u6e90'), dataIndex: 'source', width: 120, render: (v: string) => <Tag color={v === 'local' ? 'gold' : 'blue'}>{v === 'local' ? T('\u672c\u5730\u8349\u7a3f') : T('\u540e\u7aef\u771f\u5b9e\u8bb0\u5f55')}</Tag> },
+            {
+              title: T('\u8d28\u63a7'),
+              dataIndex: 'review_id',
+              width: 180,
+              render: (_: string, row: FeedbackRow) => {
+                const targetType = row.recommendation_id ? 'recommendation' : 'feedback';
+                const targetId = row.recommendation_id || row.feedback_id;
+                const href = '/cases/' + caseId + '/quality-reviews?trace_id=' + encodeURIComponent(row.trace_id || '') + '&target_type=' + encodeURIComponent(targetType) + '&target_id=' + encodeURIComponent(targetId || '') + '&related_feedback_id=' + encodeURIComponent(row.feedback_id || '') + '&attribution=' + encodeURIComponent('human_feedback') + '&severity=' + encodeURIComponent('medium');
+                return <Link href={href}>{T('\u521b\u5efa\u8d28\u63a7\u5ba1\u67e5')}</Link>;
+              }
+            },
             { title: 'doctor_id', dataIndex: 'doctor_id', width: 180, render: (v: string) => v || '-' },
             { title: 'created_at', dataIndex: 'created_at', width: 220, render: (v: string) => v || '-' },
           ]}
