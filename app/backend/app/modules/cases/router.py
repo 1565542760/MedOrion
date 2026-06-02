@@ -10,6 +10,7 @@ from app.db.enums import CaseStatus
 from app.db.models import Case, InferenceTask, Patient
 from app.db.session import SessionLocal
 from app.modules.cases.schemas import CaseCreateRequestV1, CaseItemV1, CaseListResponseV1, CaseResponseV1
+from app.modules.feedback.schemas import DoctorFeedbackItemV1, DoctorFeedbackListResponseV1
 
 router = APIRouter()
 
@@ -135,3 +136,53 @@ def list_case_traces(case_id: str, db: Session = Depends(get_db)) -> CaseRespons
     if case is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'case_not_found', 'message': 'Case not found'})
     return CaseResponseV1(route=f'/api/v1/cases/{case_id}/traces', item=_item(db, case))
+
+
+@router.get('/{case_id}/feedback', response_model=DoctorFeedbackListResponseV1)
+def list_case_feedback(case_id: str, db: Session = Depends(get_db)) -> DoctorFeedbackListResponseV1:
+    case = _resolve_case(db, case_id)
+    if case is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'case_not_found', 'message': 'Case not found'})
+
+    rows = db.execute(
+        text(
+            """
+            select
+              id::text as feedback_id,
+              case_id::text as case_id,
+              trace_id,
+              recommendation_id::text as recommendation_id,
+              feedback_type::text as feedback_type,
+              clinical_rationale as feedback_text,
+              decision as doctor_decision,
+              rating,
+              doctor_id,
+              learning_eligible,
+              created_at,
+              updated_at
+            from doctor_feedback
+            where case_id = :case_id
+            order by created_at desc, id desc
+            """
+        ),
+        {'case_id': case.id},
+    ).mappings().all()
+
+    items = [
+        DoctorFeedbackItemV1(
+            feedback_id=row['feedback_id'],
+            case_id=row['case_id'],
+            trace_id=row['trace_id'],
+            recommendation_id=row.get('recommendation_id'),
+            feedback_type=row['feedback_type'],
+            feedback_text=row.get('feedback_text'),
+            doctor_decision=row.get('doctor_decision'),
+            rating=row.get('rating'),
+            doctor_id=row.get('doctor_id'),
+            learning_eligible=row.get('learning_eligible', True),
+            created_at=row.get('created_at'),
+            updated_at=row.get('updated_at'),
+        )
+        for row in rows
+    ]
+    return DoctorFeedbackListResponseV1(items=items, total=len(items))
