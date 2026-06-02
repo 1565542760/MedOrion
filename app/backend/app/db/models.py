@@ -460,3 +460,192 @@ class RefreshToken(Base):
     expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class OrchestrationRun(Base, TimestampMixin):
+    __tablename__ = 'orchestration_runs'
+    __table_args__ = (
+        UniqueConstraint('orchestration_run_id', name='uq_orchestration_runs_orchestration_run_id'),
+        Index('ix_orchestration_runs_trace_id', 'trace_id'),
+        Index('ix_orchestration_runs_case_id', 'case_id'),
+        Index('ix_orchestration_runs_patient_id', 'patient_id'),
+        Index('ix_orchestration_runs_status_started_at', 'status', 'started_at'),
+        Index('ix_orchestration_runs_started_at', 'started_at'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    orchestration_run_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('patients.id'), nullable=False)
+    mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    requested_task: Mapped[str] = mapped_column(String(128), nullable=False)
+    candidate_agents_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    clinical_context_refs_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    modality_refs_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    runtime_options_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    runtime_stub: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_detail_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class OrchestrationStep(Base, TimestampMixin):
+    __tablename__ = 'orchestration_steps'
+    __table_args__ = (
+        UniqueConstraint('step_id', name='uq_orchestration_steps_step_id'),
+        Index('ix_orchestration_steps_trace_id', 'trace_id'),
+        Index('ix_orchestration_steps_case_id', 'case_id'),
+        Index('ix_orchestration_steps_orchestration_run_id', 'orchestration_run_id'),
+        Index('ix_orchestration_steps_run_step_index', 'orchestration_run_id', 'step_index'),
+        Index('ix_orchestration_steps_agent_code', 'agent_code'),
+        Index('ix_orchestration_steps_model_version_id', 'model_version_id'),
+        Index('ix_orchestration_steps_status_started_at', 'status', 'started_at'),
+        Index('ix_orchestration_steps_started_at', 'started_at'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    step_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('patients.id'), nullable=False)
+    orchestration_run_id: Mapped[str] = mapped_column(
+        ForeignKey('orchestration_runs.orchestration_run_id'), nullable=False
+    )
+    parent_step_id: Mapped[str | None] = mapped_column(
+        ForeignKey('orchestration_steps.step_id'),
+    )
+    step_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    step_name: Mapped[str | None] = mapped_column(String(128))
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    agent_code: Mapped[str | None] = mapped_column(String(64))
+    agent_version: Mapped[str | None] = mapped_column(String(128))
+    model_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('model_versions.id'))
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    runtime_stub: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_detail_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class AgentInvocation(Base, TimestampMixin):
+    __tablename__ = 'agent_invocations'
+    __table_args__ = (
+        UniqueConstraint('agent_invocation_id', name='uq_agent_invocations_agent_invocation_id'),
+        Index('ix_agent_invocations_trace_id', 'trace_id'),
+        Index('ix_agent_invocations_case_id', 'case_id'),
+        Index('ix_agent_invocations_orchestration_run_id', 'orchestration_run_id'),
+        Index('ix_agent_invocations_step_id', 'step_id'),
+        Index('ix_agent_invocations_agent_code', 'agent_code'),
+        Index('ix_agent_invocations_model_version_id', 'model_version_id'),
+        Index('ix_agent_invocations_status_started_at', 'status', 'started_at'),
+        Index('ix_agent_invocations_started_at', 'started_at'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    agent_invocation_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('patients.id'), nullable=False)
+    orchestration_run_id: Mapped[str] = mapped_column(
+        ForeignKey('orchestration_runs.orchestration_run_id'), nullable=False
+    )
+    step_id: Mapped[str] = mapped_column(ForeignKey('orchestration_steps.step_id'), nullable=False)
+    agent_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_version: Mapped[str | None] = mapped_column(String(128))
+    endpoint_id: Mapped[str | None] = mapped_column(String(96))
+    endpoint_url: Mapped[str | None] = mapped_column(String(512))
+    model_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('model_versions.id'))
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    response_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    runtime_stub: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_detail_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class OrchestrationConflict(Base, TimestampMixin):
+    __tablename__ = 'orchestration_conflicts'
+    __table_args__ = (
+        UniqueConstraint('conflict_id', name='uq_orchestration_conflicts_conflict_id'),
+        Index('ix_orchestration_conflicts_trace_id', 'trace_id'),
+        Index('ix_orchestration_conflicts_case_id', 'case_id'),
+        Index('ix_orchestration_conflicts_orchestration_run_id', 'orchestration_run_id'),
+        Index('ix_orchestration_conflicts_status_started_at', 'status', 'started_at'),
+        Index('ix_orchestration_conflicts_started_at', 'started_at'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    conflict_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('patients.id'), nullable=False)
+    orchestration_run_id: Mapped[str] = mapped_column(
+        ForeignKey('orchestration_runs.orchestration_run_id'), nullable=False
+    )
+    step_id: Mapped[str | None] = mapped_column(ForeignKey('orchestration_steps.step_id'))
+    conflict_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary_text: Mapped[str | None] = mapped_column(Text)
+    resolution_strategy: Mapped[str | None] = mapped_column(String(64))
+    resolution_summary: Mapped[str | None] = mapped_column(Text)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    runtime_stub: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_detail_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class LlmSummary(Base, TimestampMixin):
+    __tablename__ = 'llm_summaries'
+    __table_args__ = (
+        UniqueConstraint('summary_id', name='uq_llm_summaries_summary_id'),
+        Index('ix_llm_summaries_trace_id', 'trace_id'),
+        Index('ix_llm_summaries_case_id', 'case_id'),
+        Index('ix_llm_summaries_orchestration_run_id', 'orchestration_run_id'),
+        Index('ix_llm_summaries_model_version_id', 'model_version_id'),
+        Index('ix_llm_summaries_status_started_at', 'status', 'started_at'),
+        Index('ix_llm_summaries_started_at', 'started_at'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    summary_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('patients.id'), nullable=False)
+    orchestration_run_id: Mapped[str] = mapped_column(
+        ForeignKey('orchestration_runs.orchestration_run_id'), nullable=False
+    )
+    step_id: Mapped[str | None] = mapped_column(ForeignKey('orchestration_steps.step_id'))
+    agent_invocation_id: Mapped[str | None] = mapped_column(
+        ForeignKey('agent_invocations.agent_invocation_id')
+    )
+    model_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('model_versions.id'))
+    summary_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary_text: Mapped[str | None] = mapped_column(Text)
+    summary_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    runtime_stub: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_detail_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
