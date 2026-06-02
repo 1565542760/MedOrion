@@ -1,6 +1,7 @@
 
 from fastapi import APIRouter
 
+from app.modules.agent_gateway.router import gateway_router as agent_gateway_router, registry_router as agent_registry_router
 from app.modules.assets.router import router as assets_router
 from app.modules.auth.router import router as auth_router
 from app.modules.cases.router import router as cases_router
@@ -23,6 +24,8 @@ api_router.include_router(clinical_router, tags=['case-missing-values'])
 api_router.include_router(inference_router, tags=['inference'])
 api_router.include_router(recommendations_router, tags=['recommendations'])
 api_router.include_router(model_registry_router, prefix='/model-registry', tags=['model-registry'])
+api_router.include_router(agent_registry_router, prefix='/agent-registry', tags=['agent-registry'])
+api_router.include_router(agent_gateway_router, prefix='/agent-gateway', tags=['agent-gateway'])
 api_router.include_router(model_version_router, tags=['model-versions'])
 api_router.include_router(feedback_router, prefix='/feedback', tags=['feedback'])
 api_router.include_router(traces_router, tags=['traces'])
