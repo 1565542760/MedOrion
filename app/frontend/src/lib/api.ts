@@ -342,6 +342,85 @@ export type QualityReviewResponse = {
   item: QualityReviewItem;
 };
 
+export type ModelRegistryItem = {
+  model_id: string;
+  model_name: string;
+  disease_agent: string;
+  task_type: string;
+  modality_scope: string[];
+  owner_team: string;
+  description?: string | null;
+  is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  versions?: ModelVersionItem[];
+};
+
+export type ModelVersionItem = {
+  version_id: string;
+  model_id: string;
+  version_label: string;
+  approval_state: 'draft' | 'offline_evaluated' | 'approved' | 'shadow' | 'canary' | 'default' | 'deprecated' | 'archived' | string;
+  contract_version?: string | null;
+  artifact_ref?: string | null;
+  input_schema?: Record<string, unknown> | null;
+  output_schema?: Record<string, unknown> | null;
+  metrics?: Record<string, unknown> | null;
+  runtime_constraints?: Record<string, unknown> | null;
+  notes?: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  promoted_by?: string | null;
+  promoted_at?: string | null;
+  archived_at?: string | null;
+  rollback_from_version_id?: string | null;
+  published_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type ModelListResponse = {
+  items: ModelRegistryItem[];
+  total: number;
+};
+
+export type ModelCreatePayload = {
+  model_name: string;
+  disease_agent: string;
+  task_type: string;
+  modality_scope: string[];
+  owner_team: string;
+  description?: string;
+};
+
+export type ModelCreateResponse = {
+  status?: string;
+  route: string;
+  item: ModelRegistryItem;
+};
+
+export type ModelVersionCreatePayload = {
+  version_label: string;
+  artifact_ref: string;
+  metrics?: Record<string, unknown>;
+  runtime_constraints?: Record<string, unknown>;
+  notes?: string;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+};
+
+export type ModelVersionResponse = {
+  status?: string;
+  route: string;
+  item: ModelVersionItem;
+};
+
+export type ModelVersionEvaluationsResponse = {
+  status?: string;
+  route: string;
+  item: Record<string, unknown>;
+};
+
 export type TraceEventItem = {
   event_type?: string;
   source_record_id?: string | null;
@@ -592,6 +671,115 @@ export async function createQualityReview(payload: QualityReviewCreatePayload): 
   }
   const data = (await client.post('/api/v1/quality-reviews', payload)).data as QualityReviewResponse;
   return unwrapItem<QualityReviewItem>(data);
+}
+
+export async function listModels(): Promise<ModelListResponse> {
+  if (API_MODE === 'mock') {
+    const items: ModelRegistryItem[] = [];
+    return { items, total: items.length };
+  }
+  const data = (await client.get('/api/v1/model-registry')).data;
+  const items = unwrapList<ModelRegistryItem>(data);
+  const total = typeof data?.total === 'number' ? data.total : items.length;
+  return { items, total };
+}
+
+export async function createModel(payload: ModelCreatePayload): Promise<ModelRegistryItem> {
+  if (API_MODE === 'mock') {
+    return {
+      model_id: 'model-demo-created',
+      model_name: payload.model_name,
+      disease_agent: payload.disease_agent,
+      task_type: payload.task_type,
+      modality_scope: payload.modality_scope,
+      owner_team: payload.owner_team,
+      description: payload.description || null,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      versions: [],
+    };
+  }
+  const data = (await client.post('/api/v1/model-registry', payload)).data as ModelCreateResponse;
+  return unwrapItem<ModelRegistryItem>(data);
+}
+
+export async function getModel(modelId: string): Promise<ModelRegistryItem> {
+  if (API_MODE === 'mock') {
+    return {
+      model_id: modelId,
+      model_name: 'demo-model',
+      disease_agent: 'capcop_agent',
+      task_type: 'risk_assessment',
+      modality_scope: ['ct'],
+      owner_team: 'diagnostics',
+      description: 'demo',
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      versions: [],
+    };
+  }
+  const data = (await client.get('/api/v1/model-registry/' + modelId)).data;
+  return unwrapItem<ModelRegistryItem>(data);
+}
+
+export async function createModelVersion(modelId: string, payload: ModelVersionCreatePayload): Promise<ModelVersionItem> {
+  if (API_MODE === 'mock') {
+    return {
+      version_id: 'version-demo-created',
+      model_id: modelId,
+      version_label: payload.version_label,
+      approval_state: 'draft',
+      contract_version: 'v1',
+      artifact_ref: payload.artifact_ref,
+      input_schema: payload.input_schema || {},
+      output_schema: payload.output_schema || {},
+      metrics: payload.metrics || {},
+      runtime_constraints: payload.runtime_constraints || {},
+      notes: payload.notes || null,
+      approved_by: null,
+      approved_at: null,
+      promoted_by: null,
+      promoted_at: null,
+      archived_at: null,
+      rollback_from_version_id: null,
+      published_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+  const data = (await client.post('/api/v1/model-registry/' + modelId + '/versions', payload)).data as ModelVersionResponse;
+  return unwrapItem<ModelVersionItem>(data);
+}
+
+export async function approveModelVersion(versionId: string) {
+  return (await client.post('/api/v1/model-versions/' + versionId + '/approve', {})).data as ModelVersionResponse;
+}
+
+export async function promoteModelVersion(versionId: string, targetState: string) {
+  return (await client.post('/api/v1/model-versions/' + versionId + '/promote', { target_state: targetState })).data as ModelVersionResponse;
+}
+
+export async function rollbackModelVersion(versionId: string, targetVersionId: string) {
+  return (await client.post('/api/v1/model-versions/' + versionId + '/rollback', { rollback_to_version_id: targetVersionId, target_version_id: targetVersionId })).data as ModelVersionResponse;
+}
+
+export async function getModelVersionEvaluations(versionId: string): Promise<ModelVersionEvaluationsResponse> {
+  if (API_MODE === 'mock') {
+    return {
+      status: 'ok',
+      route: '/api/v1/model-versions/' + versionId + '/evaluations',
+      item: {
+        version_id: versionId,
+        overall_score: 0.82,
+        metrics: { auc: 0.82, f1: 0.71 },
+        notes: 'demo evaluation summary',
+      },
+    };
+  }
+  const data = (await client.get('/api/v1/model-versions/' + versionId + '/evaluations')).data;
+  return unwrapItem<ModelVersionEvaluationsResponse>(data);
 }
 
 export async function getTrace(traceId: string) {
