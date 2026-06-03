@@ -109,6 +109,81 @@ class ModelVersionEvaluationsItemV1(BaseModel):
     updated_at: datetime | None = None
 
 
+class ModelVersionArtifactMetadataRequestV1(BaseModel):
+    artifact_uri: str | None = None
+    artifact_type: str | None = None
+    artifact_hash: str | None = None
+    hash_algorithm: str | None = None
+    file_size_bytes: int | None = None
+    registered_by: str | None = None
+    registered_at: datetime | None = None
+    source_note: str | None = None
+    provenance_json: dict | list | str = Field(default_factory=dict)
+    safety_notes: list[str] = Field(default_factory=list)
+    adapter_type: str | None = None
+    preprocess_schema_version: str | None = None
+    postprocess_schema_version: str | None = None
+
+
+class ModelVersionArtifactValidationRecordRequestV1(BaseModel):
+    validation_status: str = 'recorded'
+    validation_code: str | None = None
+    validation_message: str | None = None
+    validation_notes: str | None = None
+    validated_by: str | None = None
+    validated_at: datetime | None = None
+
+
+class ModelVersionArtifactValidationRecordItemV1(BaseModel):
+    validation_record_id: str
+    validation_status: str
+    validation_code: str | None = None
+    validation_message: str | None = None
+    validation_notes: str | None = None
+    validated_by: str | None = None
+    validated_at: datetime | None = None
+    metadata_only: bool = True
+    artifact_not_loaded: bool = True
+
+
+class ModelVersionArtifactMetadataItemV1(BaseModel):
+    version_id: UUID
+    model_id: UUID
+    model_name: str | None = None
+    version_label: str | None = None
+    artifact_state: str = 'metadata_only'
+    metadata_only: bool = True
+    artifact_not_loaded: bool = True
+    artifact_uri: str | None = None
+    artifact_type: str | None = None
+    artifact_hash: str | None = None
+    hash_algorithm: str | None = None
+    file_size_bytes: int | None = None
+    registered_by: str | None = None
+    registered_at: datetime | None = None
+    source_note: str | None = None
+    provenance_json: dict | list | str = Field(default_factory=dict)
+    safety_notes: list[str] = Field(default_factory=list)
+    adapter_type: str | None = None
+    preprocess_schema_version: str | None = None
+    postprocess_schema_version: str | None = None
+    validation_records: list[ModelVersionArtifactValidationRecordItemV1] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class ModelVersionArtifactMetadataResponseV1(BaseModel):
+    status: str = 'ok'
+    route: str
+    item: ModelVersionArtifactMetadataItemV1
+
+
+class ModelVersionArtifactValidationRecordResponseV1(BaseModel):
+    status: str = 'ok'
+    route: str
+    item: ModelVersionArtifactValidationRecordItemV1
+
+
 class ModelVersionEvaluationsResponseV1(BaseModel):
     status: str = 'ok'
     route: str

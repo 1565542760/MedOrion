@@ -1,6 +1,7 @@
 
 import logging
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,6 +21,12 @@ from app.modules.model_registry.schemas import (
     ModelRegistryResponseV1,
     ModelRegistrySummaryItemV1,
     ModelVersionCreateRequestV1,
+    ModelVersionArtifactMetadataItemV1,
+    ModelVersionArtifactMetadataRequestV1,
+    ModelVersionArtifactMetadataResponseV1,
+    ModelVersionArtifactValidationRecordItemV1,
+    ModelVersionArtifactValidationRecordRequestV1,
+    ModelVersionArtifactValidationRecordResponseV1,
     ModelVersionEvaluationsItemV1,
     ModelVersionEvaluationsResponseV1,
     ModelVersionItemV1,
@@ -88,6 +95,153 @@ def _notes(runtime_constraints: dict | str | None) -> str | None:
         value = runtime_constraints.get('notes')
         return value if isinstance(value, str) else None
     return None
+
+
+def _artifact_metadata_json(version: ModelVersion) -> dict[str, Any]:
+    raw = version.artifact_ref_json
+    if isinstance(raw, dict):
+        data: dict[str, Any] = dict(raw)
+    elif raw is None:
+        data = {}
+    else:
+        data = {'artifact_uri': raw}
+
+    data.setdefault('metadata_only', True)
+    data.setdefault('artifact_not_loaded', True)
+    data.setdefault('artifact_state', 'metadata_only')
+    data.setdefault('validation_records', [])
+    return data
+
+
+def _artifact_metadata_item(version: ModelVersion, model: ModelRegistry | None = None) -> ModelVersionArtifactMetadataItemV1:
+    data = _artifact_metadata_json(version)
+    records: list[ModelVersionArtifactValidationRecordItemV1] = []
+    for record in data.get('validation_records', []):
+        if not isinstance(record, dict):
+            continue
+        validated_at = record.get('validated_at')
+        if isinstance(validated_at, str):
+            try:
+                validated_at = datetime.fromisoformat(validated_at.replace('Z', '+00:00'))
+            except ValueError:
+                validated_at = None
+        records.append(
+            ModelVersionArtifactValidationRecordItemV1(
+                validation_record_id=str(record.get('validation_record_id') or record.get('id') or uuid4()),
+                validation_status=str(record.get('validation_status') or 'recorded'),
+                validation_code=record.get('validation_code'),
+                validation_message=record.get('validation_message'),
+                validation_notes=record.get('validation_notes'),
+                validated_by=record.get('validated_by'),
+                validated_at=validated_at,
+                metadata_only=bool(record.get('metadata_only', True)),
+                artifact_not_loaded=bool(record.get('artifact_not_loaded', True)),
+            )
+        )
+
+    registered_at = data.get('registered_at')
+    if isinstance(registered_at, str):
+        try:
+            registered_at = datetime.fromisoformat(registered_at.replace('Z', '+00:00'))
+        except ValueError:
+            registered_at = None
+
+    return ModelVersionArtifactMetadataItemV1(
+        version_id=version.id,
+        model_id=version.model_id,
+        model_name=model.model_name if model is not None else None,
+        version_label=version.version_label,
+        artifact_state=str(data.get('artifact_state') or 'metadata_only'),
+        metadata_only=bool(data.get('metadata_only', True)),
+        artifact_not_loaded=bool(data.get('artifact_not_loaded', True)),
+        artifact_uri=data.get('artifact_uri'),
+        artifact_type=data.get('artifact_type'),
+        artifact_hash=data.get('artifact_hash'),
+        hash_algorithm=data.get('hash_algorithm'),
+        file_size_bytes=data.get('file_size_bytes'),
+        registered_by=data.get('registered_by'),
+        registered_at=registered_at,
+        source_note=data.get('source_note'),
+        provenance_json=data.get('provenance_json') or {},
+        safety_notes=list(data.get('safety_notes') or []),
+        adapter_type=data.get('adapter_type'),
+        preprocess_schema_version=data.get('preprocess_schema_version'),
+        postprocess_schema_version=data.get('postprocess_schema_version'),
+        validation_records=records,
+        created_at=version.created_at,
+        updated_at=version.updated_at,
+    )
+
+
+def _store_artifact_metadata(version: ModelVersion, payload: ModelVersionArtifactMetadataRequestV1, actor: User | None = None) -> dict[str, Any]:
+    data = _artifact_metadata_json(version)
+    now = datetime.now(UTC)
+    actor_id = str(actor.id) if actor else None
+
+    if payload.artifact_uri is not None:
+        data['artifact_uri'] = payload.artifact_uri
+    if payload.artifact_type is not None:
+        data['artifact_type'] = payload.artifact_type
+    if payload.artifact_hash is not None:
+        data['artifact_hash'] = payload.artifact_hash
+    if payload.hash_algorithm is not None:
+        data['hash_algorithm'] = payload.hash_algorithm
+    if payload.file_size_bytes is not None:
+        data['file_size_bytes'] = payload.file_size_bytes
+    if payload.registered_by is not None:
+        data['registered_by'] = payload.registered_by
+    elif actor_id is not None:
+        data['registered_by'] = actor_id
+    if payload.registered_at is not None:
+        data['registered_at'] = payload.registered_at.isoformat()
+    elif 'registered_at' not in data:
+        data['registered_at'] = now.isoformat()
+    if payload.source_note is not None:
+        data['source_note'] = payload.source_note
+    if payload.provenance_json is not None:
+        data['provenance_json'] = payload.provenance_json
+    if payload.safety_notes is not None:
+        data['safety_notes'] = list(payload.safety_notes)
+    if payload.adapter_type is not None:
+        data['adapter_type'] = payload.adapter_type
+    if payload.preprocess_schema_version is not None:
+        data['preprocess_schema_version'] = payload.preprocess_schema_version
+    if payload.postprocess_schema_version is not None:
+        data['postprocess_schema_version'] = payload.postprocess_schema_version
+
+    data['metadata_only'] = True
+    data['artifact_not_loaded'] = True
+    data['artifact_state'] = 'metadata_only'
+    version.artifact_ref_json = data
+    return data
+
+
+def _append_artifact_validation_record(
+    version: ModelVersion,
+    payload: ModelVersionArtifactValidationRecordRequestV1,
+    actor: User | None = None,
+) -> dict[str, Any]:
+    data = _artifact_metadata_json(version)
+    now = payload.validated_at or datetime.now(UTC)
+    record = {
+        'validation_record_id': str(uuid4()),
+        'validation_status': payload.validation_status,
+        'validation_code': payload.validation_code,
+        'validation_message': payload.validation_message,
+        'validation_notes': payload.validation_notes,
+        'validated_by': payload.validated_by or (str(actor.id) if actor else 'system'),
+        'validated_at': now.isoformat(),
+        'metadata_only': True,
+        'artifact_not_loaded': True,
+    }
+    records = list(data.get('validation_records') or [])
+    records.append(record)
+    data['validation_records'] = records
+    data['artifact_state'] = 'metadata_only'
+    data['metadata_only'] = True
+    data['artifact_not_loaded'] = True
+    version.artifact_ref_json = data
+    return record
 
 
 def _version_item(version: ModelVersion) -> ModelVersionItemV1:
@@ -375,4 +529,71 @@ def get_version_evaluations(version_id: UUID, db: Session = Depends(get_db)) -> 
             created_at=version.created_at,
             updated_at=version.updated_at,
         ),
+    )
+
+
+@version_router.get('/model-versions/{version_id}/artifact-metadata', response_model=ModelVersionArtifactMetadataResponseV1)
+def get_artifact_metadata(version_id: UUID, db: Session = Depends(get_db)) -> ModelVersionArtifactMetadataResponseV1:
+    version = db.execute(select(ModelVersion).where(ModelVersion.id == version_id)).scalar_one_or_none()
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'version_not_found', 'message': 'Model version not found'})
+    model = db.execute(select(ModelRegistry).where(ModelRegistry.id == version.model_id)).scalar_one_or_none()
+    return ModelVersionArtifactMetadataResponseV1(
+        route=f'/api/v1/model-versions/{version_id}/artifact-metadata',
+        item=_artifact_metadata_item(version, model),
+    )
+
+
+@version_router.post('/model-versions/{version_id}/artifact-metadata', response_model=ModelVersionArtifactMetadataResponseV1)
+def upsert_artifact_metadata(
+    version_id: UUID,
+    payload: ModelVersionArtifactMetadataRequestV1,
+    db: Session = Depends(get_db),
+    actor: User | None = Depends(_maybe_current_user),
+) -> ModelVersionArtifactMetadataResponseV1:
+    version = db.execute(select(ModelVersion).where(ModelVersion.id == version_id)).scalar_one_or_none()
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'version_not_found', 'message': 'Model version not found'})
+    _ensure_mutable(version)
+    _store_artifact_metadata(version, payload, actor=actor)
+    db.commit()
+    db.refresh(version)
+    model = db.execute(select(ModelRegistry).where(ModelRegistry.id == version.model_id)).scalar_one_or_none()
+    logger.info(
+        'model_version_artifact_metadata_saved model_id=%s version_id=%s artifact_state=%s actor=%s',
+        version.model_id,
+        version.id,
+        'metadata_only',
+        actor.id if actor else 'system',
+    )
+    return ModelVersionArtifactMetadataResponseV1(
+        route=f'/api/v1/model-versions/{version_id}/artifact-metadata',
+        item=_artifact_metadata_item(version, model),
+    )
+
+
+@version_router.post('/model-versions/{version_id}/artifact-validation-record', response_model=ModelVersionArtifactValidationRecordResponseV1)
+def record_artifact_validation(
+    version_id: UUID,
+    payload: ModelVersionArtifactValidationRecordRequestV1,
+    db: Session = Depends(get_db),
+    actor: User | None = Depends(_maybe_current_user),
+) -> ModelVersionArtifactValidationRecordResponseV1:
+    version = db.execute(select(ModelVersion).where(ModelVersion.id == version_id)).scalar_one_or_none()
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'version_not_found', 'message': 'Model version not found'})
+    _ensure_mutable(version)
+    record = _append_artifact_validation_record(version, payload, actor=actor)
+    db.commit()
+    db.refresh(version)
+    logger.info(
+        'model_version_artifact_validation_recorded model_id=%s version_id=%s status=%s actor=%s',
+        version.model_id,
+        version.id,
+        payload.validation_status,
+        actor.id if actor else 'system',
+    )
+    return ModelVersionArtifactValidationRecordResponseV1(
+        route=f'/api/v1/model-versions/{version_id}/artifact-validation-record',
+        item=ModelVersionArtifactValidationRecordItemV1(**record),
     )
