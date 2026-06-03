@@ -24,7 +24,7 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const protectedPrefixes = ['/dashboard', '/cases', '/models', '/learning-library'];
+const protectedPrefixes = ['/dashboard', '/cases', '/models', '/learning-library', '/feedback', '/quality-reviews', '/lineage'];
 
 function isProtectedPath(pathname: string) {
   return protectedPrefixes.some((prefix) => pathname.startsWith(prefix));
