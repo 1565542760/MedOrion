@@ -217,7 +217,7 @@ Deployment-specific implementation belongs to the deployment thread, but the fol
 
 ## 13. Stage Snapshot
 
-Current delivery stage: `Stage 30: MVP workflow skeleton through quality review completed`
+Current delivery stage: `Stage 42 preparation: MVP skeleton through persistent orchestration audit completed`
 
 Completed capability set:
 
@@ -229,6 +229,10 @@ Completed capability set:
 - Missing-value consultation.
 - Doctor feedback.
 - Quality review.
+- Model registry lifecycle skeleton.
+- Agent gateway skeleton.
+- Multi-agent orchestration skeleton.
+- Orchestration audit persistence loop.
 
 Not yet production complete:
 
@@ -237,3 +241,5 @@ Not yet production complete:
 - Full model lifecycle management.
 - Automated training.
 - Database externalization and restore drills.
+- Orchestration audit is not yet automatically mirrored into case trace/evidence tables.
+

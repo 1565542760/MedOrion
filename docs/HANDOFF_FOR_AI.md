@@ -27,8 +27,8 @@ Read in this order before making changes:
 
 ## Current Stage
 
-- Current stage: Stage 30: MVP workflow skeleton through quality review completed
-- Latest commit: `09591b9`
+- Current stage: Stage 42 preparation: MVP skeleton through persistent orchestration audit completed
+- Latest commit: `1b3caeb`
 
 Current capabilities:
 
@@ -37,6 +37,9 @@ Current capabilities:
 - `model_selected` plus five-class trace event audit semantics are present.
 - Formal patient/case creation is in place.
 - Missing-value consultation, doctor feedback, and quality review flows are in place.
+- Model registry lifecycle skeleton and agent gateway skeleton are in place.
+- Multi-agent orchestration skeleton is in place.
+- Orchestration audit now persists to `orchestration_runs`, `orchestration_steps`, `agent_invocations`, `orchestration_conflicts`, and `llm_summaries`.
 
 Current system is not:
 
@@ -44,6 +47,7 @@ Current system is not:
 - A real model inference system
 - A real training system
 - A public production deployment
+- Case trace/evidence is not yet automatically extended by orchestration audit.
 
 ## Remote Server
 

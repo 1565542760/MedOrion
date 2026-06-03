@@ -5,7 +5,7 @@ Owner: MedOrion general architecture and scheduling thread
 
 ## Current Stage
 
-Stage 30 is now complete at the MVP workflow-skeleton level through quality review. The platform has moved beyond the initial stub-only demo loop and now includes authentication, frontend login/proxy flow, formal patient/case creation, model-service stub integration, trace/evidence persistence, missing-value consultation, doctor feedback, and quality review.
+Stage 42 preparation is now the current focus. The platform has moved beyond the initial stub-only demo loop and now includes authentication, frontend login/proxy flow, formal patient/case creation, model-service stub integration, trace/evidence persistence, missing-value consultation, doctor feedback, quality review, model registry lifecycle skeleton, agent gateway skeleton, multi-agent orchestration skeleton, and orchestration audit persistence.
 
 ## Global Blocker
 
@@ -44,6 +44,8 @@ No hard blocker is currently preventing continuation. The system remains stub-on
 ## Current Rule
 
 Frontend may initialize under `/srv/medorion/app/frontend` and use local backend stubs. Do not enable Nginx, do not expose public routes, do not start model-service beyond the stub already in use, and do not perform `.pth` file operations.
+
+Orchestration audit persistence is currently limited to the orchestration audit tables and must not automatically write into case trace/evidence tables unless a later stage explicitly says so.
 
 ## Global File Safety Constraint
 
