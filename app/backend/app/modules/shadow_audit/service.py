@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException, status
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.models import Case, ModelRegistry, ModelVersion, ShadowInferenceOutput, ShadowInferenceRun
 from app.modules.model_input.router import build_model_input_assessment_from_schema, build_model_input_schema_for_version
+from app.modules.shadow_audit.eligibility import ShadowEligibilityResult, evaluate_cap_cop_clinical_mlp_shadow_eligibility, runtime_safety_config_summary
 from app.modules.shadow_audit.schemas import (
     ControlledShadowClinicalMlpRequestV1,
     ShadowAuditWriteRequestV1,
@@ -42,6 +44,8 @@ class ControlledShadowClinicalMlpResult:
     run: ShadowInferenceRunItemV1
     outputs: list[ShadowInferenceOutputItemV1]
     validation: object
+    eligibility: ShadowEligibilityResult
+    runtime_safety_config: dict[str, Any]
     shadow_disabled: bool
     execution_mode: str
     limitations: list[str]
@@ -167,13 +171,22 @@ def run_controlled_cap_cop_clinical_mlp_shadow(
     model, version = _require_model_version(db, payload.model_version_id)
     schema_item = build_model_input_schema_for_version(model, version)
     assessment = build_model_input_assessment_from_schema(schema_item, payload.provided_features)
+    eligibility_preview = evaluate_cap_cop_clinical_mlp_shadow_eligibility(
+        db,
+        model_version_id=payload.model_version_id,
+        provided_features=payload.provided_features,
+        available_modalities=payload.available_modalities,
+        respect_global_switch=False,
+    )
 
+    runtime_safety_config = runtime_safety_config_summary()
     limitations = [
         'shadow_audit_only',
         'not_for_diagnosis',
         'disabled_by_default',
         'no_real_model_loaded',
         'no_case_trace_write',
+        'runtime_safety_config_skeleton',
     ]
     runtime_env = {
         'shadow_gate_enabled': bool(settings.enable_cap_cop_clinical_mlp_shadow),
@@ -191,6 +204,10 @@ def run_controlled_cap_cop_clinical_mlp_shadow(
         'no_silent_fallback': True,
         'available_modalities': list(payload.available_modalities),
         'runtime_options_json': dict(payload.runtime_options_json or {}),
+        'runtime_safety_config': runtime_safety_config,
+        'eligibility_status': eligibility_preview.status,
+        'eligibility_reason': eligibility_preview.reason,
+        'eligibility_details': eligibility_preview.details,
     }
     started_at = datetime.now(UTC)
     completed_at = started_at
@@ -204,6 +221,10 @@ def run_controlled_cap_cop_clinical_mlp_shadow(
         'suggested_doctor_questions': assessment.suggested_doctor_questions,
         'runtime_stub': True,
         'not_for_diagnosis': True,
+        'runtime_safety_config': runtime_safety_config,
+        'eligibility_status': eligibility_preview.status,
+        'eligibility_reason': eligibility_preview.reason,
+        'eligibility_details': eligibility_preview.details,
     }
 
     if not settings.enable_cap_cop_clinical_mlp_shadow:
@@ -219,7 +240,7 @@ def run_controlled_cap_cop_clinical_mlp_shadow(
         output_payload = None
         shadow_disabled = True
         execution_mode = 'disabled_by_default'
-    elif assessment.insufficient_data_for_assessment or assessment.missing_required_features:
+    elif eligibility_preview.status == 'input_insufficient':
         artifact_hash = _artifact_hash_from_version(version, allow_placeholder=True) or 'metadata_only'
         status_code = 'shadow_insufficient_input'
         error_code = 'insufficient_data_for_assessment'
@@ -232,6 +253,19 @@ def run_controlled_cap_cop_clinical_mlp_shadow(
         output_payload = None
         shadow_disabled = False
         execution_mode = 'validation_only'
+    elif eligibility_preview.status != 'eligible':
+        artifact_hash = _artifact_hash_from_version(version, allow_placeholder=True) or 'metadata_only'
+        status_code = 'shadow_model_not_enabled'
+        error_code = eligibility_preview.status
+        error_detail = {
+            **base_detail,
+            'code': eligibility_preview.status,
+            'message': eligibility_preview.reason or 'Model is not eligible for controlled shadow execution',
+            'eligibility_details': eligibility_preview.details,
+        }
+        output_payload = None
+        shadow_disabled = False
+        execution_mode = 'eligibility_blocked'
     else:
         artifact_hash = _artifact_hash_from_version(version, allow_placeholder=False)
         if artifact_hash is None:
@@ -280,6 +314,7 @@ def run_controlled_cap_cop_clinical_mlp_shadow(
             'controlled_shadow_stub',
             'no_real_model_loaded',
             'no_case_trace_write',
+            'runtime_safety_config_skeleton',
         ]
 
     input_snapshot_text = f'{case_uuid}:{version.id}:{schema_item.model_input_schema_id}:{assessment.current_assessment_status}:{sorted(str(key) for key in payload.provided_features.keys())}'
@@ -308,6 +343,8 @@ def run_controlled_cap_cop_clinical_mlp_shadow(
         run=audit_result.run,
         outputs=audit_result.outputs,
         validation=assessment,
+        eligibility=eligibility_preview,
+        runtime_safety_config=runtime_safety_config,
         shadow_disabled=shadow_disabled,
         execution_mode=execution_mode,
         limitations=limitations,

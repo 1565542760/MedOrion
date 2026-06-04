@@ -96,6 +96,26 @@ class ShadowAuditWriteRequestV1(BaseModel):
     output: dict | None = None
 
 
+class RuntimeSafetyConfigItemV1(BaseModel):
+    cpu_only: bool = True
+    batch_size: int = 1
+    max_concurrency: int = 1
+    timeout_seconds: int = 10
+    force_no_grad: bool = True
+    force_eval_mode: bool = True
+    disable_gpu: bool = True
+
+
+class ShadowEligibilityGateItemV1(BaseModel):
+    status: str
+    eligible: bool = False
+    reason: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    runtime_stub: bool = True
+    not_for_diagnosis: bool = True
+    runtime_safety_config: RuntimeSafetyConfigItemV1 = Field(default_factory=RuntimeSafetyConfigItemV1)
+
+
 class ControlledShadowClinicalMlpRequestV1(BaseModel):
     trace_id: str
     model_version_id: UUID
@@ -113,5 +133,7 @@ class ControlledShadowClinicalMlpResponseV1(BaseModel):
     execution_mode: str = 'controlled_shadow_stub'
     shadow_disabled: bool = False
     validation: ModelInputAssessmentItemV1
+    eligibility: ShadowEligibilityGateItemV1 = Field(default_factory=ShadowEligibilityGateItemV1)
+    runtime_safety_config: RuntimeSafetyConfigItemV1 = Field(default_factory=RuntimeSafetyConfigItemV1)
     item: ShadowInferenceRunDetailItemV1
     limitations: list[str] = Field(default_factory=list)

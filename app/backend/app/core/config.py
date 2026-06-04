@@ -1,4 +1,6 @@
 
+from uuid import UUID
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +18,14 @@ class Settings(BaseSettings):
     s3_endpoint_url: str = 'http://127.0.0.1:9000'
     model_service_url: str = 'http://127.0.0.1:8100'
     enable_cap_cop_clinical_mlp_shadow: bool = False
+    cap_cop_clinical_mlp_shadow_cpu_only: bool = True
+    cap_cop_clinical_mlp_shadow_batch_size: int = 1
+    cap_cop_clinical_mlp_shadow_max_concurrency: int = 1
+    cap_cop_clinical_mlp_shadow_timeout_seconds: int = 10
+    cap_cop_clinical_mlp_shadow_force_no_grad: bool = True
+    cap_cop_clinical_mlp_shadow_force_eval_mode: bool = True
+    cap_cop_clinical_mlp_shadow_disable_gpu: bool = True
+    cap_cop_clinical_mlp_shadow_allowed_model_version_ids: list[UUID] = []
     log_level: str = 'INFO'
 
     jwt_secret_key: str = 'CHANGE_ME_stage18_jwt_secret'

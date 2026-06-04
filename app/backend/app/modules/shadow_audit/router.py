@@ -12,6 +12,8 @@ from app.db.session import SessionLocal
 from app.modules.shadow_audit.schemas import (
     ControlledShadowClinicalMlpRequestV1,
     ControlledShadowClinicalMlpResponseV1,
+    RuntimeSafetyConfigItemV1,
+    ShadowEligibilityGateItemV1,
     ShadowAuditWriteRequestV1,
     ShadowInferenceOutputItemV1,
     ShadowInferenceOutputListResponseV1,
@@ -73,6 +75,16 @@ def run_controlled_shadow_clinical_mlp(
         execution_mode=result.execution_mode,
         shadow_disabled=result.shadow_disabled,
         validation=result.validation,
+        eligibility=ShadowEligibilityGateItemV1(
+            status=result.eligibility.status,
+            eligible=result.eligibility.eligible,
+            reason=result.eligibility.reason,
+            details=result.eligibility.details,
+            runtime_stub=result.eligibility.runtime_stub,
+            not_for_diagnosis=result.eligibility.not_for_diagnosis,
+            runtime_safety_config=RuntimeSafetyConfigItemV1.model_validate(result.runtime_safety_config),
+        ),
+        runtime_safety_config=RuntimeSafetyConfigItemV1.model_validate(result.runtime_safety_config),
         item=ShadowInferenceRunDetailItemV1.model_validate({**result.run.model_dump(), 'outputs': result.outputs}),
         limitations=list(result.limitations),
     )
