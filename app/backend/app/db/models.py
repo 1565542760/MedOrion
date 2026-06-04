@@ -184,6 +184,70 @@ class ModelVersion(Base, TimestampMixin):
 
 
 
+class ShadowInferenceRun(Base, TimestampMixin):
+    __tablename__ = 'shadow_inference_runs'
+    __table_args__ = (
+        UniqueConstraint('shadow_run_id', name='uq_shadow_runs_shadow_run_id'),
+        Index('ix_shadow_runs_trace', 'trace_id'),
+        Index('ix_shadow_runs_case', 'case_id'),
+        Index('ix_shadow_runs_patient', 'patient_id'),
+        Index('ix_shadow_runs_modelver', 'model_version_id'),
+        Index('ix_shadow_runs_status', 'status'),
+        Index('ix_shadow_runs_started', 'started_at'),
+        Index('ix_shadow_runs_case_start', 'case_id', 'started_at'),
+        Index('ix_shadow_runs_trace_modelver', 'trace_id', 'model_version_id'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    shadow_run_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('patients.id'), nullable=False)
+    model_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('model_versions.id'), nullable=False)
+    artifact_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    adapter_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_input_schema_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    input_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    runtime_env_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    runtime_stub: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    not_for_diagnosis: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_detail_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class ShadowInferenceOutput(Base):
+    __tablename__ = 'shadow_inference_outputs'
+    __table_args__ = (
+        UniqueConstraint('output_id', name='uq_shadow_outs_output_id'),
+        Index('ix_shadow_outs_trace', 'trace_id'),
+        Index('ix_shadow_outs_case', 'case_id'),
+        Index('ix_shadow_outs_modelver', 'model_version_id'),
+        Index('ix_shadow_outs_shadow_run', 'shadow_run_id'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    output_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    shadow_run_id: Mapped[str] = mapped_column(
+        ForeignKey('shadow_inference_runs.shadow_run_id', name='fk_shadow_outs_shadow_run'),
+        nullable=False,
+    )
+    trace_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    model_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('model_versions.id'), nullable=False)
+    prediction_raw_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    prediction_probability_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    candidate_label: Mapped[str | None] = mapped_column(String(128))
+    confidence_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    uncertainty_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    limitations_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    input_quality_flags_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class InferenceTask(Base, TimestampMixin):
     __tablename__ = 'inference_tasks'
     __table_args__ = (
