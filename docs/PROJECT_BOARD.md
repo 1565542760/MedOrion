@@ -1,88 +1,118 @@
-# MedOrion Project Board
+# PROJECT_BOARD
 
-Last updated: 2026-06-02 Asia/Shanghai
-Owner: MedOrion general architecture and scheduling thread
+Last updated: 2026-06-04 Asia/Shanghai
 
 ## Current Stage
 
-Stage 42 preparation is now the current focus. The platform has moved beyond the initial stub-only demo loop and now includes authentication, frontend login/proxy flow, formal patient/case creation, model-service stub integration, trace/evidence persistence, missing-value consultation, doctor feedback, quality review, model registry lifecycle skeleton, agent gateway skeleton, multi-agent orchestration skeleton, and orchestration audit persistence.
+**Stage 69: MVP skeleton with CAP/COP clinical MLP shadow readiness and shadow audit UI completed.**
 
-## Global Blocker
+The project is runnable as a local MVP skeleton. It supports doctor workbench flows, trace/evidence skeletons, model registry, agent/orchestration audit, model input validation, and shadow audit viewing.
 
-No hard blocker is currently preventing continuation. The system remains stub-only and must not be treated as a real diagnosis platform.
+It is not a real diagnostic system and does not run live real-model inference in the doctor-facing path.
 
-## Backend Status
+## Current Service State
 
-- Backend container: medorion-backend-1 running
-- Binding: 127.0.0.1:8000 -> 8000/tcp
-- /health/live: 200
-- /health/ready: 200
-- /health: 200
-- Domain API stubs: implemented
-- Pydantic schema stubs: implemented
-- request_id/trace_id logging: verified in container logs
+Expected local-only runtime:
 
-## Implemented Backend Stub Groups
-
-- /api/v1/auth
-- /api/v1/patients
-- /api/v1/cases
-- /api/v1/cases/{case_id}/traces
-- /api/v1/cases/{case_id}/inputs
-- /api/v1/cases/{case_id}/missing-values
-- /api/v1/cases/{case_id}/recommendations
-- /api/v1/cases/{case_id}/inference-tasks
-- /api/v1/inference-tasks/{task_id}
-- /api/v1/reassessment-jobs
-- /api/v1/model-registry
-- /api/v1/feedback
-- /api/v1/traces/{trace_id}
-- /api/v1/traces/{trace_id}/events
-- /api/v1/traces/{trace_id}/evidence-chain
-- /api/v1/quality-reviews
-
-## Current Rule
-
-Frontend may initialize under `/srv/medorion/app/frontend` and use local backend stubs. Do not enable Nginx, do not expose public routes, do not start model-service beyond the stub already in use, and do not perform `.pth` file operations.
-
-Orchestration audit persistence is currently limited to the orchestration audit tables and must not automatically write into case trace/evidence tables unless a later stage explicitly says so.
-
-## Global File Safety Constraint
-
-If any later task needs a deep-learning `.pth` model file, no thread may scan, copy, move, or infer paths from other project folders. The thread must report the need to the main controller, and the main controller will ask the user for the exact file location.
-
-## Running Infra
-
-| Service | Status | Binding |
+| Service | Endpoint | Status Expectation |
 | --- | --- | --- |
-| Backend | running | 127.0.0.1:8000 -> 8000/tcp |
-| PostgreSQL | healthy | 127.0.0.1:5432 -> 5432/tcp |
-| Redis | healthy | 127.0.0.1:6379 -> 6379/tcp |
-| MinIO API | healthy | 127.0.0.1:9000 -> 9000/tcp |
-| MinIO Console | healthy | 127.0.0.1:9001 -> 9001/tcp |
-| Frontend | running | 127.0.0.1:3000 -> 3000/tcp |
-| model-service | running | 127.0.0.1:8100 -> 8100/tcp |
+| Frontend | `127.0.0.1:3000` | Next.js dev server |
+| Backend | `127.0.0.1:8000` | FastAPI API |
+| Model-service | `127.0.0.1:8100` | FastAPI model-service skeleton |
+| PostgreSQL | compose internal/local | running |
+| Redis | compose internal/local | running |
+| MinIO | compose internal/local | running |
+| Nginx | none | disabled/inactive |
 
-## Conversation Status
+Access is through SSH tunnel to port `3000`.
 
-| Conversation | Status | Current Instruction |
+## Completed Milestones
+
+| Area | Status |
+| --- | --- |
+| Foundation backend/frontend/model-service stub | Complete |
+| Git baseline and release checkpoint | Complete |
+| Auth/RBAC skeleton | Complete |
+| Frontend login/proxy flow | Complete |
+| Formal patient/case creation | Complete |
+| Inference trace/evidence loop | Complete |
+| Missing-value consultation loop | Complete |
+| Doctor feedback loop | Complete |
+| Quality review loop | Complete |
+| Model registry lifecycle skeleton | Complete |
+| Model registry frontend UI | Complete |
+| Agent Gateway skeleton | Complete |
+| Multi-agent orchestration skeleton | Complete |
+| Persistent orchestration audit | Complete |
+| MVP skeleton acceptance | Complete |
+| Real model onboarding contracts | Complete |
+| CAP/COP clinical MLP dry-run | Complete for fold1 only |
+| CAP/COP clinical MLP offline evaluation | Complete, low-evidence/internal retrospective |
+| Model input schema and selection skeleton | Complete |
+| Frontend model input preview UI | Complete |
+| Shadow audit schema/read API | Complete |
+| Controlled shadow audit write skeleton | Complete |
+| Frontend shadow audit UI | Complete |
+
+## CAP/COP Model Onboarding Board
+
+| Item | Current Status | Notes |
 | --- | --- | --- |
-| MedOrion-???????? | Active | Maintain source of truth, decisions, and scheduling board. |
-| MedOrion-??????? | Active next | Continue UI polish and validation around auth, case, feedback, and quality review flows. |
-| MedOrion-???MLOps | Monitor | Keep infra healthy; do not enable Nginx or public exposure. |
-| MedOrion-??API???? | Hold | Support contract gaps only; no unnecessary new business logic. |
-| MedOrion-????????? | Hold | Wait for future model registry and real model onboarding readiness. |
-| MedOrion-??????? | Hold | Optional later verification of trace and quality review behavior. |
+| Clinical MLP adapter | Draft/disabled | Architecture and dry-run helper exist; not live |
+| Clinical MLP fold1 | Dry-run passed | Single artifact structure and dummy forward only |
+| Clinical MLP fold5 | Shadow candidate | Best retrospective fold; not default |
+| Imaging ResNet18 adapter | Skeleton/disabled | No real loading |
+| Multimodal ResNet18 adapter | Skeleton/disabled | No real loading |
+| Feature set | `cap_cop_clinical_feature_set_v1` | 36 CAP/COP task-related fields, includes `Striated_shadow.1` |
+| Model input schema | Skeleton/API/UI complete | Not a global case table shape |
+| Shadow audit | Schema/API/UI complete | Separate from formal recommendation/evidence |
 
-## Next Required Return From Frontend Thread
+## Current Boundaries
 
-1. Frontend project path and package manager.
-2. Chosen stack and dependency versions.
-3. Route/page skeleton created.
-4. Mock API adapter design and base URL configuration.
-5. Backend stub endpoints consumed successfully.
-6. Whether local frontend dev server runs and on which localhost port.
-7. Confirmation Nginx remains disabled and no public exposure was added.
-8. Confirmation no model-service, training, or `.pth` operation occurred.
-9. Any backend stub contract gaps discovered.
-10. What should be added to SOURCE_OF_TRUTH.md or docs/decisions.
+- Real adapters are disabled for live inference.
+- Fold5 is only a shadow candidate.
+- Shadow audit records are not formal diagnosis and are not formal recommendations.
+- Orchestration audit and shadow audit are separate from case evidence chains.
+- Missing required model features must result in consultation, explicit default strategy, or `insufficient_data_for_assessment`.
+- No silent fallback is allowed.
+
+## Active Risks
+
+| Risk | Current Mitigation |
+| --- | --- |
+| Confusing shadow candidate with production model | Docs and UI state must keep `shadow`, `not_for_diagnosis`, and disabled/live boundaries visible |
+| Historical CAP/COP schema overfitting the whole system | Separate `disease_task_feature_set` from `model_input_schema` |
+| Runtime code lagging behind repo | Always verify container/runtime endpoints after sync |
+| Model file safety | Only touch explicitly authorized single artifact path and stage |
+| Lack of independent clinical validation | Keep evaluation labelled low evidence/internal retrospective |
+| Dev-only shadow write endpoint misuse | Keep explicit `runtime_stub=true` and `not_for_diagnosis=true`; consider future env gate |
+
+## Suggested Next Work
+
+Short-term safe options:
+
+1. Stage 69 documentation/release checkpoint.
+2. Controlled shadow execution plan, still not live/default.
+3. Frontend readability pass for model input and shadow audit pages.
+4. Admin/RBAC hardening.
+5. Deployment hardening plan: HTTPS/Nginx, backup/restore, external DB rehearsal.
+
+Avoid for now:
+
+- Real live diagnosis.
+- Default model promotion.
+- Automatic training.
+- Public deployment.
+- Broad model directory scanning.
+
+## Conversation Routing
+
+| Work Type | Preferred Thread |
+| --- | --- |
+| Stage decision, documentation, Git checkpoint | Main controller |
+| Backend APIs, DB, migrations, containers | Backend/deployment |
+| Browser pages, warnings, UI routing | Frontend |
+| Provenance, audit, trace/evidence review | Traceability/review |
+| Model onboarding, adapters, artifact rules | Model/onboarding |
+
+When in doubt, the main controller should decide stage order and produce the exact prompt for the target thread.

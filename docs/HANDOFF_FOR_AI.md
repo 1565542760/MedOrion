@@ -1,147 +1,173 @@
-# HANDOFF FOR AI
+# HANDOFF_FOR_AI
 
 ## Purpose
 
-This document is the handoff guide for a new AI session or a new specialized conversation taking over MedOrion.
-
-Its purpose is to prevent drift, unsafe changes, unintended service operations, and accidental interaction with model artifact files.
+This document is for a new AI assistant or engineer taking over MedOrion. It summarizes the current stage, hard boundaries, and safe next actions.
 
 ## Project Identity
 
-- Project: MedOrion
-- Positioning: A multimodal medical intelligent-agent assisted diagnosis platform for doctors. It does not replace physician diagnosis.
-- CAP/COP is the first-stage demonstration disease task, not the only target of the system.
+MedOrion is a local-first doctor workbench and clinical AI orchestration skeleton. It is designed to support traceable, governed small-model and LLM-assisted workflows. The current system is a runnable MVP skeleton, not a real diagnostic product.
 
 ## Must Read First
 
-Read in this order before making changes:
+Read these before changing code:
 
 1. `README.md`
 2. `docs/architecture/SOURCE_OF_TRUTH.md`
 3. `docs/PROJECT_BOARD.md`
-4. `docs/backend/BACKEND_STAGE_02_SCHEMA_API_PLAN.md`
-5. `docs/traceability/TRACEABILITY_STAGE_01_CONTRACT.md`
-6. `docs/traceability/TRACEABILITY_STAGE_14_REVIEW.md`
-7. `docs/traceability/TRACEABILITY_STAGE_15_QUICK_REVIEW.md`
-8. `docs/model_orchestration/MODEL_ORCHESTRATION_STAGE_01_CONTRACT.md`
+4. `docs/releases/MVP_SKELETON_STAGE_44_RELEASE.md`
+5. `docs/model_orchestration/REAL_MODEL_ONBOARDING_STAGE_45_CONTRACT.md`
+6. `docs/model_orchestration/CAP_COP_REAL_MODEL_STAGE_57_CLINICAL_MLP_SHADOW_READINESS.md`
+7. `docs/backend/MODEL_INPUT_SCHEMA_STAGE_58_CONTRACT.md`
+8. `docs/backend/MODEL_INPUT_SCHEMA_STAGE_59_SKELETON.md`
+9. `docs/backend/SHADOW_AUDIT_STAGE_64_SCHEMA_PLAN.md`
+10. `docs/traceability/TRACEABILITY_STAGE_67_SHADOW_WRITE_REVIEW.md`
 
 ## Current Stage
 
-- Current stage: Stage 42 preparation: MVP skeleton through persistent orchestration audit completed
-- Latest commit: `1b3caeb`
+**Stage 69: MVP skeleton with CAP/COP clinical MLP shadow readiness and shadow audit UI completed.**
 
-Current capabilities:
-
-- `frontend -> backend -> model-service stub -> backend -> frontend`
-- Minimal trace/evidence persistence loop is in place.
-- `model_selected` plus five-class trace event audit semantics are present.
-- Formal patient/case creation is in place.
-- Missing-value consultation, doctor feedback, and quality review flows are in place.
-- Model registry lifecycle skeleton and agent gateway skeleton are in place.
-- Multi-agent orchestration skeleton is in place.
-- Orchestration audit now persists to `orchestration_runs`, `orchestration_steps`, `agent_invocations`, `orchestration_conflicts`, and `llm_summaries`.
-
-Current system is not:
-
-- A real diagnosis system
-- A real model inference system
-- A real training system
-- A public production deployment
-- Case trace/evidence is not yet automatically extended by orchestration audit.
+The system has passed MVP skeleton acceptance and now includes a governed path toward real CAP/COP model shadow evaluation. Clinical MLP fold5 is only a shadow candidate. It is not live, not default, and not doctor-facing diagnosis.
 
 ## Remote Server
 
-- Remote server: `ssh sygxdg@100.73.42.19`
-- All implementation work must run on the remote server, not on the local workstation.
+- Host: `100.73.42.19`
+- SSH user: `sygxdg`
+- Repository: `/home/sygxdg/MedOrion`
+- Runtime root: `/srv/medorion`
 
 ## Repository vs Runtime
 
-- Git repository: `/home/sygxdg/MedOrion`
-- Runtime/deployment directory: `/srv/medorion`
-- Update repository code first, verify, then sync/deploy to runtime directory.
-- Do not commit runtime data, logs, secrets, or model weights.
+Use `/home/sygxdg/MedOrion` as source of truth for committed work.
+
+Use `/srv/medorion` as the running application tree. When code changes are intended to run, synchronize deliberately and verify the runtime service.
+
+Do not assume a change is live just because it exists in the repository. Several past issues were caused by container/runtime code lagging behind repository code.
 
 ## Current Running Services
 
-- frontend: `127.0.0.1:3000`
-- backend: `127.0.0.1:8000`
-- model-service stub: `127.0.0.1:8100`
-- PostgreSQL: `127.0.0.1:5432`
-- Redis: `127.0.0.1:6379`
-- MinIO: `127.0.0.1:9000/9001`
-- Nginx: disabled/inactive
+Expected services:
+
+- frontend dev server on `127.0.0.1:3000`
+- backend on `127.0.0.1:8000`
+- model-service on `127.0.0.1:8100`
+- postgres
+- redis
+- minio
+
+Nginx should remain disabled/inactive unless a specific deployment stage approves it.
 
 ## Access Pattern
 
-SSH tunnel:
+From the local machine:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 sygxdg@100.73.42.19
 ```
 
-Browser:
+Open:
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:3000/login
 ```
+
+The frontend uses `/backend-api` rewrites, so a separate `8000` tunnel is normally unnecessary.
 
 ## Conversation Responsibilities
 
-- General architecture and decision control: single source of truth, scheduling center, architecture arbitration.
-- Deployment and MLOps: server, Docker, Compose, Nginx, backup, runtime environment, Git checkpoints.
-- Backend API and database: FastAPI, database, API, Alembic, case/patient/task/feedback, trace API.
-- Small model and agent orchestration: model-service, disease agent, model schema, orchestration flow.
-- Traceability and quality control: trace_id, evidence chain, missing-value audit, quality rules.
-- Frontend doctor workstation: doctor-side pages, multimodal views, missing-value confirmation, recommendation/trace/feedback display.
+The project has often been advanced through specialized conversations. Keep responsibilities clean:
+
+- **Main controller:** decides stage order, validates summaries, owns documentation and checkpoints.
+- **Backend/deployment thread:** implements backend, database, containers, and runtime checks.
+- **Frontend thread:** implements UI, route, and browser-facing issues.
+- **Traceability/review thread:** reviews provenance, audit semantics, and case trace/evidence boundaries.
+- **Model/onboarding thread:** handles real model metadata, dry-run plans, and adapter contracts.
+
+If work is sent to the wrong thread, it usually does not corrupt the project, but it can cause the wrong thread to review rather than implement. Re-route clearly.
 
 ## Non-Negotiable Rules
 
-- Do not commit `.env`.
-- Do not commit secrets.
-- Do not commit `data/logs/object-storage/backups`.
-- Do not commit model weights: `.pth/.pt/.onnx/.ckpt/.safetensors`.
-- Do not scan, copy, move, or guess model file paths. Ask controller/user first when model files are needed.
-- Do not implement automatic real-time training.
-- Do not treat dynamic condition feedback as real-time training.
-- Do not enable Nginx or public exposure unless explicitly approved by controller.
-- Do not enable GPU unless entering a dedicated GPU stage.
-- Do not change schema or run Alembic unless explicitly allowed by task scope.
+Do not:
+
+- Enable Nginx or public exposure casually.
+- Commit `.env`, secrets, token, dev password, data, logs, or model files.
+- Scan or guess model file paths.
+- Touch `.pth/.pt/.onnx/.ckpt/.safetensors` except under explicit user-approved path and stage.
+- Train, retrain, or enable automatic training.
+- Promote a model to `default` based only on dry-run or low-evidence retrospective evaluation.
+- Hide failures through silent fallback.
+- Put orchestration or shadow audit noise into formal case evidence chains.
 
 ## Trace and Evidence Invariants
 
-- Every recommendation must bind to a `trace_id`.
-- model-service must not generate or replace `trace_id`.
-- Backend inference task is the canonical `trace_id` owner.
-- Current event order:
-  1. `inference_task_created`
-  2. `model_selected`
-  3. `model_invoked`
-  4. `model_result_received`
-  5. `recommendation_generated`
-- Current minimal evidence graph:
-  - `model_output`
-  - `recommendation`
-  - `supports`
-- All stub outputs must include `runtime_stub:true` or equivalent limiting semantics.
+Case trace/evidence currently records clinically meaningful skeleton events for inference, missing values, feedback, and quality review.
+
+Orchestration audit is separate:
+
+- `orchestration_runs`
+- `orchestration_steps`
+- `agent_invocations`
+- `orchestration_conflicts`
+- `llm_summaries`
+
+Shadow audit is separate:
+
+- `shadow_inference_runs`
+- `shadow_inference_outputs`
+
+Shadow and orchestration records can be queried by trace or case, but they are not automatically formal evidence chain nodes.
+
+## CAP/COP Current Model State
+
+CAP/COP classification is currently represented by three planned small-model families:
+
+- Clinical MLP
+- Imaging ResNet18
+- Multimodal ResNet18
+
+Current status:
+
+- Clinical MLP fold1 single-file dry-run succeeded.
+- Clinical MLP fold1-fold5 internal retrospective evaluation completed.
+- Fold5 is the current shadow candidate.
+- Evidence level is low/internal retrospective; no independent held-out test has been established.
+- Adapters remain disabled for normal live inference.
+- No real model is used for doctor-facing diagnosis.
+
+## Model Input Rule
+
+`cap_cop_clinical_feature_set_v1` is a disease-task feature set, not a global patient/case table. Current CAP/COP clinical attributes include 36 fields and intentionally preserve `Striated_shadow.1`.
+
+Use `model_input_schema` and `clinical_feature_mapping` to map system data to model-specific inputs. Future models may have very different feature requirements.
+
+Single-model disease-task scenarios should validate the one model instead of pretending to select among models. Multi-model disease-task scenarios may rank/select candidates, but required missing fields must not silently fall back.
+
+Allowed missing-required-field outcomes:
+
+- ask the doctor through missing-value consultation
+- apply an explicit default strategy when allowed
+- return `insufficient_data_for_assessment`
 
 ## Known Temporary Risks
 
-- `case-001` stub anchor is temporary and should later be replaced by formal case creation flow.
-- model-service is stub-only.
-- Frontend lineage is MVP-level.
-- Frontend quality review UI may still need polish and deeper validation.
-- Real model lifecycle management is not in place.
-- Login/permission system is not in place.
-- Externalized database backup/restore drills are not yet completed.
-- No causal analysis module exists yet; it is reserved for future expansion.
+- Dev auth remains local/MVP-level.
+- Clinical MLP fold5 is not clinically validated for production.
+- Shadow write endpoint is controlled/development-oriented and must not be treated as production inference.
+- Shadow and orchestration audit visibility exists, but the product UX is still skeletal.
+- Real deployment hardening is not done: no HTTPS, no externalized DB plan applied, no backup/restore rehearsal.
 
 ## Recommended Next Steps
 
-- Design the minimum authentication and authorization scheme.
-- Implement formal case creation flow and replace `case-001` stub anchoring.
-- Continue with frontend UI polish.
-- Add the first round of frontend quality review integration.
-- Proceed to model registry/version lifecycle management.
-- Strengthen deployment with Nginx/HTTPS, backup restoration, and database externalization drills.
-- Real `.pth` model integration must wait for controller-approved, user-provided path input.
-- Investigate causal analysis / counterfactual reasoning only in a later stage.
+Reasonable next stages:
+
+1. Stage 69 checkpoint/release documentation update.
+2. Stage 70 controlled shadow execution plan or shadow-readiness gate review.
+3. Frontend refinement for model input and shadow audit readability.
+4. Admin/RBAC hardening.
+5. Production deployment plan only after local MVP boundaries are frozen.
+
+Do not jump straight to real clinical diagnosis or default model serving.
+
+## Latest Checkpoint Before This Document
+
+`2d19ae8 feat: add shadow audit UI`
