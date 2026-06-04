@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { use, useMemo, useState } from 'react';
@@ -17,7 +17,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
     requested_task: 'risk_assessment',
     model_version_policy: { mode: 'latest_approved', pinned_version: 'capcop_stub_v1' },
     inputs: { ct: 'stub://ct/1', labs: { wbc: 11.2 } },
-    missing_value_context: { pending_queries: [] }
+    missing_value_context: { pending_queries: [] },
   }), []);
 
   async function handleRunStubInference() {
@@ -26,7 +26,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
     try {
       const payload: InferenceTaskPayload = {
         ...payloadBase,
-        idempotency_key: 'idem-' + caseId + '-' + Date.now().toString()
+        idempotency_key: 'idem-' + caseId + '-' + Date.now().toString(),
       };
       const data = await createInferenceTask(caseId, payload);
       setResult(data);
@@ -56,14 +56,20 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
         </Space>
       </Card>
 
-
-
       <Card title='模型输入预览'>
         <Space direction='vertical' size={8}>
           <Typography.Text type='secondary'>先查看模型输入 schema，再回来做模型选择和规则校验。</Typography.Text>
           <Link href={'/cases/' + caseId + '/model-input'}>查看模型输入预览</Link>
         </Space>
       </Card>
+
+      <Card title='Shadow 审计入口'>
+        <Space direction='vertical' size={8}>
+          <Typography.Text type='secondary'>Shadow audit 是旁路审计，不影响正式 recommendation，不是诊断结论，也不是医生替代。</Typography.Text>
+          <Link href={'/cases/' + caseId + '/shadow-audit'}>查看 Shadow 审计</Link>
+        </Space>
+      </Card>
+
       <Card title='最小推理调用链验证'>
         <Space direction='vertical' size={12} style={{ width: '100%' }}>
           <Button type='primary' loading={running} onClick={handleRunStubInference}>运行模拟推理</Button>

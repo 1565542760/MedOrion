@@ -1,4 +1,4 @@
-import axios from 'axios';
+﻿import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 
 type ApiMode = 'mock' | 'backend';
@@ -94,7 +94,7 @@ export const apiConfig = { mode: API_MODE, baseURL: API_BASE_URL };
 const mock = {
   cases: [
     { case_id: 'case-001', patient_id: 'patient-001', disease_task: 'CAP', status: 'in_review', trace_id: 'trace-demo' },
-    { case_id: 'case-002', patient_id: 'patient-002', disease_task: 'COP', status: 'awaiting_input', trace_id: 'trace-demo-2' }
+    { case_id: 'case-002', patient_id: 'patient-002', disease_task: 'COP', status: 'awaiting_input', trace_id: 'trace-demo-2' },
   ],
   missingQueries: [
     {
@@ -116,7 +116,7 @@ const mock = {
       default_reason: null,
       default_value_json: null,
       created_at: '2026-06-02T00:00:00Z',
-      updated_at: '2026-06-02T00:00:00Z'
+      updated_at: '2026-06-02T00:00:00Z',
     },
     {
       query_id: 'query-demo-answer',
@@ -137,7 +137,7 @@ const mock = {
       default_reason: null,
       default_value_json: null,
       created_at: '2026-06-02T00:00:00Z',
-      updated_at: '2026-06-02T00:00:00Z'
+      updated_at: '2026-06-02T00:00:00Z',
     },
     {
       query_id: 'query-demo-default',
@@ -158,11 +158,11 @@ const mock = {
       default_reason: '演示默认策略',
       default_value_json: { value: 'demo-default' },
       created_at: '2026-06-02T00:00:00Z',
-      updated_at: '2026-06-02T00:00:00Z'
-    }
+      updated_at: '2026-06-02T00:00:00Z',
+    },
   ],
   recommendations: [
-    { recommendation_id: 'rec-001', title: '示例推荐结果', risk_score: 0.78, trace_id: 'trace-demo' }
+    { recommendation_id: 'rec-001', title: '示例推荐结果', risk_score: 0.78, trace_id: 'trace-demo' },
   ],
   qualityReviews: [
     {
@@ -178,12 +178,10 @@ const mock = {
       related_feedback_id: 'feedback-demo-001',
       opened_by: 'dev_doctor',
       created_at: '2026-06-02T00:00:00Z',
-      updated_at: '2026-06-02T00:00:00Z'
-    }
-  ]
+      updated_at: '2026-06-02T00:00:00Z',
+    },
+  ],
 };
-
-
 export type InferenceTaskPayload = {
   patient_id: string;
   disease_agent: string;
@@ -1053,3 +1051,197 @@ export async function previewModelSelection(caseId: string, payload: ModelSelect
   const data = (await client.post('/api/v1/cases/' + caseId + '/model-selection-preview', payload)).data;
   return data as ModelSelectionPreviewResponse;
 }
+
+
+export type ShadowInferenceRunOutputItem = {
+  id: string;
+  output_id: string;
+  shadow_run_id: string;
+  trace_id: string;
+  case_id: string;
+  model_version_id: string;
+  prediction_raw_json?: unknown | null;
+  prediction_probability_json?: Record<string, unknown> | null;
+  candidate_label?: string | null;
+  confidence_json?: Record<string, unknown> | null;
+  uncertainty_json?: Record<string, unknown> | null;
+  limitations_json?: Record<string, unknown> | null;
+  input_quality_flags_json?: Record<string, unknown> | null;
+  created_at?: string | null;
+};
+
+export type ShadowInferenceRunItem = {
+  id: string;
+  shadow_run_id: string;
+  trace_id: string;
+  case_id: string;
+  patient_id?: string | null;
+  model_version_id: string;
+  artifact_hash?: string | null;
+  adapter_code?: string | null;
+  model_input_schema_id?: string | null;
+  input_snapshot_id?: string | null;
+  status?: string | null;
+  runtime_env_json?: Record<string, unknown> | null;
+  runtime_stub?: boolean | null;
+  not_for_diagnosis?: boolean | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  error_code?: string | null;
+  error_detail_json?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  outputs?: ShadowInferenceRunOutputItem[];
+};
+
+export type ShadowInferenceRunListResponse = {
+  items: ShadowInferenceRunItem[];
+  total: number;
+};
+
+export type ShadowInferenceRunOutputsResponse = {
+  items: ShadowInferenceRunOutputItem[];
+  total: number;
+};
+
+export type ShadowInferenceRunResponse = {
+  status?: string;
+  route?: string;
+  item: ShadowInferenceRunItem;
+};
+
+export async function getShadowInferenceRun(shadowRunId: string): Promise<ShadowInferenceRunItem> {
+  if (API_MODE === 'mock') {
+    return {
+      id: 'shadow-demo-id',
+      shadow_run_id: shadowRunId,
+      trace_id: 'trace-demo',
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      model_version_id: 'capcop_stub_v1',
+      artifact_hash: 'shadow-demo-hash-001',
+      adapter_code: 'capcop_agent',
+      model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+      input_snapshot_id: 'snapshot-demo',
+      status: 'shadow_success',
+      runtime_env_json: { env: 'dev', shadow: true },
+      runtime_stub: true,
+      not_for_diagnosis: true,
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      duration_ms: null,
+      error_code: null,
+      error_detail_json: {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      outputs: [],
+    };
+  }
+  const data = (await client.get('/api/v1/shadow-inference-runs/' + shadowRunId)).data;
+  return unwrapItem<ShadowInferenceRunItem>(data);
+}
+
+export async function listShadowRunsByCase(caseId: string): Promise<ShadowInferenceRunListResponse> {
+  if (API_MODE === 'mock') {
+    const item: ShadowInferenceRunItem = {
+      id: 'shadow-demo-id',
+      shadow_run_id: 'shadow_dbf2a913fa5c4266',
+      trace_id: 'trace-demo',
+      case_id: caseId,
+      patient_id: 'patient-001',
+      model_version_id: 'capcop_stub_v1',
+      artifact_hash: 'shadow-demo-hash-001',
+      adapter_code: 'capcop_agent',
+      model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+      input_snapshot_id: 'snapshot-demo',
+      status: 'shadow_success',
+      runtime_env_json: { env: 'dev', shadow: true },
+      runtime_stub: true,
+      not_for_diagnosis: true,
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      duration_ms: 120,
+      error_code: null,
+      error_detail_json: {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    return { items: [item], total: 1 };
+  }
+  const data = (await client.get('/api/v1/cases/' + caseId + '/shadow-inference-runs')).data;
+  const items = unwrapList<ShadowInferenceRunItem>(data);
+  const total = typeof data?.total === 'number' ? data.total : items.length;
+  return { items, total };
+}
+
+export async function listShadowRunsByTrace(traceId: string): Promise<ShadowInferenceRunListResponse> {
+  if (API_MODE === 'mock') {
+    const item: ShadowInferenceRunItem = {
+      id: 'shadow-demo-id',
+      shadow_run_id: 'shadow_dbf2a913fa5c4266',
+      trace_id: traceId,
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      model_version_id: 'capcop_stub_v1',
+      artifact_hash: 'shadow-demo-hash-001',
+      adapter_code: 'capcop_agent',
+      model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+      input_snapshot_id: 'snapshot-demo',
+      status: 'shadow_success',
+      runtime_env_json: { env: 'dev', shadow: true },
+      runtime_stub: true,
+      not_for_diagnosis: true,
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      duration_ms: 120,
+      error_code: null,
+      error_detail_json: {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    return { items: [item], total: 1 };
+  }
+  const data = (await client.get('/api/v1/traces/' + traceId + '/shadow-inference-runs')).data;
+  const items = unwrapList<ShadowInferenceRunItem>(data);
+  const total = typeof data?.total === 'number' ? data.total : items.length;
+  return { items, total };
+}
+
+export async function getShadowRunOutputs(shadowRunId: string): Promise<ShadowInferenceRunOutputsResponse> {
+  if (API_MODE === 'mock') {
+    return {
+      items: [
+        {
+          id: 'shadow-output-demo-1',
+          output_id: 'out_64b0a4b9c5a64653',
+          shadow_run_id: shadowRunId,
+          trace_id: 'trace-demo',
+          case_id: 'case-001',
+          model_version_id: 'capcop_stub_v1',
+          prediction_raw_json: { label: 'shadow_positive' },
+          prediction_probability_json: { shadow_positive: 0.82 },
+          candidate_label: 'shadow_positive',
+          confidence_json: { value: 0.82 },
+          uncertainty_json: { value: 0.18 },
+          limitations_json: { notes: ['metadata_only', 'not_for_diagnosis'] },
+          input_quality_flags_json: { missing_required_features: [] },
+          created_at: new Date().toISOString(),
+        },
+      ],
+      total: 1,
+    };
+  }
+  const data = (await client.get('/api/v1/shadow-inference-runs/' + shadowRunId + '/outputs')).data;
+  const items = unwrapList<ShadowInferenceRunOutputItem>(data);
+  const total = typeof data?.total === 'number' ? data.total : items.length;
+  return { items, total };
+}
+
+
+
+
+
+
+
+
