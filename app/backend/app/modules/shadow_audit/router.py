@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.db.models import Case, ShadowInferenceOutput, ShadowInferenceRun
 from app.db.session import SessionLocal
 from app.modules.shadow_audit.schemas import (
+    ControlledShadowClinicalMlpRequestV1,
+    ControlledShadowClinicalMlpResponseV1,
     ShadowAuditWriteRequestV1,
     ShadowInferenceOutputItemV1,
     ShadowInferenceOutputListResponseV1,
@@ -17,7 +20,7 @@ from app.modules.shadow_audit.schemas import (
     ShadowInferenceRunItemV1,
     ShadowInferenceRunListResponseV1,
 )
-from app.modules.shadow_audit.service import create_shadow_audit_record
+from app.modules.shadow_audit.service import create_shadow_audit_record, run_controlled_cap_cop_clinical_mlp_shadow
 
 router = APIRouter()
 
@@ -53,6 +56,25 @@ def create_shadow_run_dev_record(payload: ShadowAuditWriteRequestV1, db: Session
         status='ok',
         route='/api/v1/shadow-inference-runs/dev-record',
         item=ShadowInferenceRunDetailItemV1.model_validate({**result.run.model_dump(), 'outputs': result.outputs}),
+    )
+
+
+@router.post('/cases/{case_id}/shadow-inference/clinical-mlp', response_model=ControlledShadowClinicalMlpResponseV1)
+def run_controlled_shadow_clinical_mlp(
+    case_id: str,
+    payload: ControlledShadowClinicalMlpRequestV1,
+    db: Session = Depends(get_db),
+) -> ControlledShadowClinicalMlpResponseV1:
+    result = run_controlled_cap_cop_clinical_mlp_shadow(db, case_id, payload)
+    db.commit()
+    return ControlledShadowClinicalMlpResponseV1(
+        status=result.run.status,
+        route=f'/api/v1/cases/{case_id}/shadow-inference/clinical-mlp',
+        execution_mode=result.execution_mode,
+        shadow_disabled=result.shadow_disabled,
+        validation=result.validation,
+        item=ShadowInferenceRunDetailItemV1.model_validate({**result.run.model_dump(), 'outputs': result.outputs}),
+        limitations=list(result.limitations),
     )
 
 

@@ -1,3 +1,4 @@
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,7 @@ class Settings(BaseSettings):
     redis_url: str = 'redis://127.0.0.1:6379/0'
     s3_endpoint_url: str = 'http://127.0.0.1:9000'
     model_service_url: str = 'http://127.0.0.1:8100'
+    enable_cap_cop_clinical_mlp_shadow: bool = False
     log_level: str = 'INFO'
 
     jwt_secret_key: str = 'CHANGE_ME_stage18_jwt_secret'

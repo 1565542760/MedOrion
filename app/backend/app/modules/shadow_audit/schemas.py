@@ -1,8 +1,13 @@
+
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.modules.model_input.schemas import ModelInputAssessmentItemV1
 
 
 class ShadowInferenceOutputItemV1(BaseModel):
@@ -89,3 +94,24 @@ class ShadowAuditWriteRequestV1(BaseModel):
     error_code: str | None = None
     error_detail_json: dict = Field(default_factory=dict)
     output: dict | None = None
+
+
+class ControlledShadowClinicalMlpRequestV1(BaseModel):
+    trace_id: str
+    model_version_id: UUID
+    provided_features: dict[str, Any] = Field(default_factory=dict)
+    available_modalities: list[str] = Field(default_factory=list)
+    runtime_options_json: dict[str, Any] = Field(default_factory=dict)
+    not_for_diagnosis: bool = True
+    runtime_stub: bool = True
+    idempotency_key: str | None = None
+
+
+class ControlledShadowClinicalMlpResponseV1(BaseModel):
+    status: str
+    route: str
+    execution_mode: str = 'controlled_shadow_stub'
+    shadow_disabled: bool = False
+    validation: ModelInputAssessmentItemV1
+    item: ShadowInferenceRunDetailItemV1
+    limitations: list[str] = Field(default_factory=list)

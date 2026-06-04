@@ -146,6 +146,19 @@ def _schema_item(db: Session, model_version_id: UUID) -> ModelInputSchemaItemV1:
     )
 
 
+def build_model_input_schema_for_version(model: ModelRegistry, version: ModelVersion) -> ModelInputSchemaItemV1:
+    profile = _profile_for_model(model, version)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'model_input_schema_not_found', 'message': 'Model input schema not found'})
+    if profile['schema_id'] != 'clinical_mlp_cap_cop_input_schema_v1':
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'unsupported_disease_task', 'message': 'Only CAP/COP clinical MLP controlled shadow execution is supported'})
+    return _schema_item_from_profile(model, version, profile)
+
+
+def build_model_input_assessment_from_schema(schema_item: ModelInputSchemaItemV1, provided_features: dict[str, Any] | None = None) -> ModelInputAssessmentItemV1:
+    return _assessment_item(schema_item, provided_features)
+
+
 def _resolve_case(db: Session, case_identifier: str) -> tuple[UUID, UUID]:
     try:
         case_id_text, patient_id_text = resolve_case_context(db, case_identifier)
