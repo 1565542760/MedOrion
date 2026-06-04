@@ -25,9 +25,9 @@ Read these before changing code:
 
 ## Current Stage
 
-**Stage 69: MVP skeleton with CAP/COP clinical MLP shadow readiness and shadow audit UI completed.**
+**Stage 80: CAP/COP clinical MLP shadow governance baseline fixed.**
 
-The system has passed MVP skeleton acceptance and now includes a governed path toward real CAP/COP model shadow evaluation. Clinical MLP fold5 is only a shadow candidate. It is not live, not default, and not doctor-facing diagnosis.
+The system has passed MVP skeleton acceptance and now includes a governed path toward real CAP/COP model shadow evaluation. Clinical MLP fold5 is only a shadow candidate. It is not live, not default, and not doctor-facing diagnosis. The governance state is NO-GO / pending sign-off / not enabled.
 
 ## Remote Server
 
@@ -90,9 +90,9 @@ If work is sent to the wrong thread, it usually does not corrupt the project, bu
 Do not:
 
 - Enable Nginx or public exposure casually.
-- Commit `.env`, secrets, token, dev password, data, logs, or model files.
+- Commit sensitive credentials, data, logs, or model files.
 - Scan or guess model file paths.
-- Touch `.pth/.pt/.onnx/.ckpt/.safetensors` except under explicit user-approved path and stage.
+- Touch model files except under explicit user-approved path and stage.
 - Train, retrain, or enable automatic training.
 - Promote a model to `default` based only on dry-run or low-evidence retrospective evaluation.
 - Hide failures through silent fallback.
@@ -160,8 +160,8 @@ Allowed missing-required-field outcomes:
 
 Reasonable next stages:
 
-1. Stage 69 checkpoint/release documentation update.
-2. Stage 70 controlled shadow execution plan or shadow-readiness gate review.
+1. Stage 80 shadow governance status update and release note.
+2. Stage 81 manual sign-off / enablement checklist or governed rehearsal planning, only if explicit approval is later granted.
 3. Frontend refinement for model input and shadow audit readability.
 4. Admin/RBAC hardening.
 5. Production deployment plan only after local MVP boundaries are frozen.

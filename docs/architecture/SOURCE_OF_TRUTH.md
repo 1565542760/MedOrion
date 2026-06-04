@@ -6,7 +6,7 @@ This document defines the architectural source of truth for MedOrion at the curr
 
 ## Current Architecture Stage
 
-**Stage 69: MVP skeleton with CAP/COP clinical MLP shadow readiness and shadow audit UI completed.**
+**Stage 80: CAP/COP clinical MLP shadow governance baseline fixed.**
 
 The platform is a local-only, traceable clinical AI workflow skeleton. It can demonstrate the structure of a doctor-facing AI workbench, but it is not a real diagnostic system.
 
@@ -55,7 +55,7 @@ Frontend owns doctor-facing workflow pages:
 - Model input preview and validation UI.
 - Shadow audit UI.
 
-Frontend must label stub/shadow/not-for-diagnosis states clearly.
+Frontend must label stub/shadow/not-for-diagnosis states clearly. The current governance status for CAP/COP clinical MLP fold5 remains NO-GO / pending sign-off / not enabled.
 
 ## Model-Service Responsibilities
 
@@ -66,7 +66,7 @@ Model-service currently provides:
 - Registry metadata for CAP/COP skeleton versions.
 - Explicit disabled responses for real adapters.
 
-Model-service currently does not provide live real-model diagnosis. Normal operation must not load `.pth/.pt/.onnx/.ckpt/.safetensors` files.
+Model-service currently does not provide live real-model diagnosis. Normal operation must not load model files.
 
 ## Data Boundary
 
@@ -142,7 +142,7 @@ Clinical MLP:
 
 - fold1 dry-run passed.
 - fold1-fold5 retrospective evaluation completed.
-- fold5 is current shadow candidate.
+- fold5 is current shadow candidate, but it is not allowlisted and cannot be treated as enabled.
 - evidence level is low/internal retrospective.
 - not live.
 - not default.
@@ -176,6 +176,6 @@ Before any production-like deployment, MedOrion still needs:
 - Operational monitoring.
 - Safety and clinical governance review.
 
-## Latest Pre-Stage-69 Checkpoint
+## Latest Governance Checkpoint
 
-`2d19ae8 feat: add shadow audit UI`
+`3e2a99a docs: add shadow manual signoff checklist`

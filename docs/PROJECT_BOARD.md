@@ -4,9 +4,9 @@ Last updated: 2026-06-04 Asia/Shanghai
 
 ## Current Stage
 
-**Stage 69: MVP skeleton with CAP/COP clinical MLP shadow readiness and shadow audit UI completed.**
+**Stage 80: CAP/COP clinical MLP shadow governance baseline fixed.**
 
-The project is runnable as a local MVP skeleton. It supports doctor workbench flows, trace/evidence skeletons, model registry, agent/orchestration audit, model input validation, and shadow audit viewing.
+The project is runnable as a local MVP skeleton. It supports doctor workbench flows, trace/evidence skeletons, model registry, agent/orchestration audit, model input validation, and shadow audit viewing. CAP/COP clinical MLP fold5 remains a shadow candidate only and is not enabled.
 
 It is not a real diagnostic system and does not run live real-model inference in the doctor-facing path.
 
@@ -70,7 +70,7 @@ Access is through SSH tunnel to port `3000`.
 ## Current Boundaries
 
 - Real adapters are disabled for live inference.
-- Fold5 is only a shadow candidate.
+- Fold5 is only a shadow candidate; the allowlist remains empty, so shadow execution is not enabled.
 - Shadow audit records are not formal diagnosis and are not formal recommendations.
 - Orchestration audit and shadow audit are separate from case evidence chains.
 - Missing required model features must result in consultation, explicit default strategy, or `insufficient_data_for_assessment`.
@@ -92,7 +92,7 @@ Access is through SSH tunnel to port `3000`.
 Short-term safe options:
 
 1. Stage 69 documentation/release checkpoint.
-2. Controlled shadow execution plan, still not live/default.
+2. Governance sign-off / no-go maintenance and readiness documentation, still not live/default.
 3. Frontend readability pass for model input and shadow audit pages.
 4. Admin/RBAC hardening.
 5. Deployment hardening plan: HTTPS/Nginx, backup/restore, external DB rehearsal.

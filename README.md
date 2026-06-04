@@ -6,7 +6,7 @@ This repository is not a real diagnostic product. It is a governed integration s
 
 ## Current Stage
 
-**Stage 69: MVP skeleton with CAP/COP clinical MLP shadow readiness and shadow audit UI completed.**
+**Stage 80: CAP/COP clinical MLP shadow governance baseline fixed.**
 
 The system can run end-to-end in local tunnel mode and supports the following MVP skeleton capabilities:
 
@@ -20,8 +20,8 @@ The system can run end-to-end in local tunnel mode and supports the following MV
 - Agent Gateway skeleton with capability validation and explicit no-silent-fallback behavior.
 - Multi-agent orchestration skeleton with persistent orchestration audit tables.
 - Model input schema / feature mapping skeleton with CAP/COP validation and selection preview.
-- Shadow audit schema, read API, controlled development write skeleton, and frontend shadow audit page.
-- CAP/COP clinical MLP onboarding artifacts documented through dry-run, offline evaluation, and shadow readiness planning.
+- Shadow audit schema, read API, controlled development write skeleton, and frontend shadow audit page. Shadow governance remains NO-GO / pending sign-off / not enabled.
+- CAP/COP clinical MLP onboarding artifacts documented through dry-run, offline evaluation, shadow readiness planning, and manual sign-off / governance review.
 
 ## What This Is Not
 
@@ -35,7 +35,7 @@ MedOrion is still not:
 - A GPU production serving stack.
 - A system that can silently choose a fallback model when the requested model or agent is unavailable.
 
-Real model work remains gated. CAP/COP clinical MLP fold5 is only a **shadow candidate**, not a default model and not a live clinical inference path.
+Real model work remains gated. CAP/COP clinical MLP fold5 is only a **shadow candidate**, not a default model and not a live clinical inference path. The governance status remains NO-GO / pending sign-off / not enabled.
 
 ## Repository Layout
 
@@ -107,7 +107,7 @@ Only port `3000` needs to be tunneled for normal UI testing because the frontend
 
 ### Auth
 
-The backend exposes minimal JWT access/refresh auth. The frontend stores tokens in localStorage for development use and protects doctor workbench routes client-side. This is sufficient for local MVP skeleton testing, not production security hardening.
+The backend exposes minimal development auth. The frontend stores development session material in localStorage and protects doctor workbench routes client-side. This is sufficient for local MVP skeleton testing, not production security hardening.
 
 ### Patient and Case
 
@@ -184,7 +184,7 @@ Current real-model status:
 
 `cap_cop_clinical_feature_set_v1` is a disease-task-level clinical feature set, not a global case table shape.
 
-The current CAP/COP clinical feature set has 36 task-related fields. `Striated_shadow.1` is intentionally preserved because it reflects the historical pandas duplicate-column handling used by the training pipeline.
+The current CAP/COP clinical feature set has 36 task-related fields. `Striated_shadow.1` is intentionally preserved because it reflects the historical pandas duplicate-column handling used by the training pipeline. It belongs to the CAP/COP feature set, not to a global case table.
 
 Model input schemas may reference the full feature set or a subset. Future models can define different feature requirements and mappings without changing the global patient/case storage model.
 
@@ -195,7 +195,7 @@ Shadow audit is available as a controlled skeleton:
 - Backend schema exists.
 - Read APIs exist.
 - Controlled development write endpoint exists.
-- Frontend shadow audit page exists at `/cases/{case_id}/shadow-audit`.
+- Frontend shadow audit page exists at `/cases/{case_id}/shadow-audit`. It is for shadow audit visibility only, not for live diagnosis.
 
 Shadow audit does not write formal recommendations, does not write case evidence chains by default, and does not imply clinical validity.
 
@@ -204,8 +204,8 @@ Shadow audit does not write formal recommendations, does not write case evidence
 Do not do any of the following without explicit approval:
 
 - Enable Nginx or public exposure.
-- Commit `.env`, secrets, tokens, passwords, logs, data directories, or model files.
-- Scan, guess, copy, move, or load `.pth/.pt/.onnx/.ckpt/.safetensors` files outside an explicitly authorized path and stage.
+- Commit sensitive credentials, logs, data directories, or model files.
+- Scan, guess, copy, move, or load model files outside an explicitly authorized path and stage.
 - Train or automatically retrain models.
 - Enable live real-model diagnosis.
 - Promote a model to default based on dry-run or low-evidence retrospective checks alone.
