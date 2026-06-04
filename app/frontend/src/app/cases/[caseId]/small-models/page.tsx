@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { use, useMemo, useState } from 'react';
 import { Alert, Button, Card, Descriptions, Space, Statistic, Typography } from 'antd';
 import { createInferenceTask, InferenceTaskPayload, InferenceTaskResponse } from '@/lib/api';
@@ -55,6 +56,14 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
         </Space>
       </Card>
 
+
+
+      <Card title='模型输入预览'>
+        <Space direction='vertical' size={8}>
+          <Typography.Text type='secondary'>先查看模型输入 schema，再回来做模型选择和规则校验。</Typography.Text>
+          <Link href={'/cases/' + caseId + '/model-input'}>查看模型输入预览</Link>
+        </Space>
+      </Card>
       <Card title='最小推理调用链验证'>
         <Space direction='vertical' size={12} style={{ width: '100%' }}>
           <Button type='primary' loading={running} onClick={handleRunStubInference}>运行模拟推理</Button>

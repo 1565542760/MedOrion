@@ -812,3 +812,244 @@ export async function createInferenceTask(caseId: string, payload: InferenceTask
   }
   return (await client.post(url, payload, withTraceId(traceId))).data;
 }
+
+
+export type ModelInputFeatureRequirement = {
+  feature_order: number;
+  source_clinical_field: string;
+  model_feature_name: string;
+  feature_type?: string | null;
+  required?: boolean;
+  optional?: boolean;
+  defaultable?: boolean;
+  default_strategy?: string | null;
+  missing_value_policy?: string | null;
+  unit?: string | null;
+  value_range?: Record<string, unknown> | null;
+  enum_mapping?: Record<string, unknown> | null;
+  notes?: string | null;
+};
+
+export type ModelInputSchemaResponse = {
+  model_version_id: string;
+  model_id: string;
+  model_name?: string | null;
+  version_label?: string | null;
+  model_input_schema_id: string;
+  model_input_schema_key: string;
+  model_input_schema_name?: string | null;
+  schema_version?: string | null;
+  disease_task?: string | null;
+  disease_task_feature_set_id?: string | null;
+  disease_task_feature_set_key?: string | null;
+  disease_task_feature_set_name?: string | null;
+  supported_disease_tasks?: string[];
+  supported_modalities?: string[];
+  lifecycle_status?: string | null;
+  model_family?: string | null;
+  preprocess_artifact_ref?: string | null;
+  feature_count?: number;
+  feature_requirements: ModelInputFeatureRequirement[];
+};
+
+export type ModelInputFeatureRequirementsResponse = {
+  status?: string;
+  route?: string;
+  model_version_id: string;
+  model_input_schema_id: string;
+  model_input_schema_key: string;
+  disease_task_feature_set_id?: string | null;
+  disease_task_feature_set_key?: string | null;
+  feature_count?: number;
+  required_count?: number;
+  optional_count?: number;
+  defaultable_count?: number;
+  feature_requirements: ModelInputFeatureRequirement[];
+};
+
+export type ModelInputPreviewPayload = {
+  disease_task: string;
+  model_version_id: string;
+  model_input?: Record<string, unknown>;
+  provided_features?: Record<string, unknown>;
+};
+
+export type ModelInputPreviewItem = {
+  model_version_id: string;
+  model_input_schema_id?: string | null;
+  model_input_schema_key?: string | null;
+  disease_task_feature_set_id?: string | null;
+  disease_task_feature_set_key?: string | null;
+  disease_task?: string | null;
+  mapped_features?: Record<string, unknown> | null;
+  provided_features?: string[] | Record<string, unknown> | null;
+  missing_features?: string[];
+  missing_required_features?: string[];
+  missing_required_details?: Array<{
+    model_feature_name?: string;
+    source_clinical_field?: string;
+    why_required?: string;
+    default_strategy?: string | null;
+    missing_value_policy?: string | null;
+    suggested_doctor_question?: string | null;
+  }>;
+  defaultable_features?: string[];
+  suggested_doctor_questions?: string[];
+  current_assessment_status?: string | null;
+  insufficient_data_for_assessment?: boolean | null;
+};
+
+export type ModelInputPreviewResponse = {
+  status?: string;
+  route?: string;
+  item: ModelInputPreviewItem;
+};
+
+export type ModelSelectionCandidate = {
+  model_version_id: string;
+  model_id: string;
+  model_name: string;
+  version_label: string;
+  model_input_schema_id?: string | null;
+  model_input_schema_key?: string | null;
+  lifecycle_status?: string | null;
+  supported_modalities?: string[];
+  feature_completeness?: number | null;
+  missing_fields?: string[];
+  missing_required_features?: string[];
+  defaultable_features?: string[];
+  suitability_reason?: string | null;
+  current_assessment_status?: string | null;
+  insufficient_data_for_assessment?: boolean | null;
+  runtime_stub?: boolean | null;
+};
+
+export type ModelSelectionPreviewResponse = {
+  status?: string;
+  route?: string;
+  disease_task?: string;
+  selection_required?: boolean;
+  selection_reason?: string | null;
+  candidate_count?: number;
+  selected_candidate?: ModelSelectionCandidate | null;
+  validation?: Record<string, unknown> | null;
+  candidates: ModelSelectionCandidate[];
+};
+
+export type ModelSelectionPayload = {
+  disease_task: string;
+  candidate_model_version_ids: string[];
+};
+
+export async function getModelInputSchema(modelVersionId: string): Promise<ModelInputSchemaResponse> {
+  if (API_MODE === 'mock') {
+    return {
+      model_version_id: modelVersionId,
+      model_id: 'model-demo',
+      model_name: 'demo-model',
+      version_label: 'v0.1.0',
+      model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+      model_input_schema_key: 'clinical_mlp_cap_cop_input_schema_v1',
+      model_input_schema_name: 'clinical_mlp_cap_cop_input_schema_v1',
+      schema_version: 'v1',
+      disease_task: 'cap_cop',
+      disease_task_feature_set_id: 'cap_cop_clinical_feature_set_v1',
+      disease_task_feature_set_key: 'cap_cop_clinical_feature_set_v1',
+      disease_task_feature_set_name: 'CAP/COP Clinical Feature Set v1',
+      supported_disease_tasks: ['cap_cop'],
+      supported_modalities: ['clinical_table'],
+      lifecycle_status: 'default',
+      model_family: 'clinical_mlp',
+      preprocess_artifact_ref: 'metadata-only://demo',
+      feature_count: 0,
+      feature_requirements: [],
+    };
+  }
+  const data = (await client.get('/api/v1/model-input-schemas/' + modelVersionId)).data;
+  return data as ModelInputSchemaResponse;
+}
+
+export async function getModelFeatureRequirements(modelVersionId: string): Promise<ModelInputFeatureRequirementsResponse> {
+  if (API_MODE === 'mock') {
+    return {
+      status: 'ok',
+      route: '/api/v1/model-input-schemas/' + modelVersionId + '/feature-requirements',
+      model_version_id: modelVersionId,
+      model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+      model_input_schema_key: 'clinical_mlp_cap_cop_input_schema_v1',
+      disease_task_feature_set_id: 'cap_cop_clinical_feature_set_v1',
+      disease_task_feature_set_key: 'cap_cop_clinical_feature_set_v1',
+      feature_count: 0,
+      required_count: 0,
+      optional_count: 0,
+      defaultable_count: 0,
+      feature_requirements: [],
+    };
+  }
+  const data = (await client.get('/api/v1/model-input-schemas/' + modelVersionId + '/feature-requirements')).data;
+  return data as ModelInputFeatureRequirementsResponse;
+}
+
+export async function previewCaseModelInput(caseId: string, payload: ModelInputPreviewPayload): Promise<ModelInputPreviewItem> {
+  if (API_MODE === 'mock') {
+    return {
+      model_version_id: payload.model_version_id,
+      model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+      model_input_schema_key: 'clinical_mlp_cap_cop_input_schema_v1',
+      disease_task_feature_set_id: 'cap_cop_clinical_feature_set_v1',
+      disease_task_feature_set_key: 'cap_cop_clinical_feature_set_v1',
+      disease_task: payload.disease_task,
+      mapped_features: {},
+      missing_features: ['Age'],
+      missing_required_features: ['Age'],
+      missing_required_details: [{ model_feature_name: 'Age', source_clinical_field: 'Age', why_required: 'demo', default_strategy: null, missing_value_policy: 'consult_doctor_first', suggested_doctor_question: 'Please provide Age.' }],
+      defaultable_features: [],
+      suggested_doctor_questions: ['Please provide Age.'],
+      current_assessment_status: 'awaiting_doctor_input',
+      insufficient_data_for_assessment: true,
+    };
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/model-input-preview', payload)).data;
+  return unwrapItem<ModelInputPreviewItem>(data);
+}
+
+export async function validateCaseModelInput(caseId: string, payload: ModelInputPreviewPayload): Promise<ModelInputPreviewItem> {
+  if (API_MODE === 'mock') {
+    return {
+      model_version_id: payload.model_version_id,
+      model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+      model_input_schema_key: 'clinical_mlp_cap_cop_input_schema_v1',
+      disease_task_feature_set_id: 'cap_cop_clinical_feature_set_v1',
+      disease_task_feature_set_key: 'cap_cop_clinical_feature_set_v1',
+      disease_task: payload.disease_task,
+      mapped_features: {},
+      missing_features: ['Age'],
+      missing_required_features: ['Age'],
+      missing_required_details: [{ model_feature_name: 'Age', source_clinical_field: 'Age', why_required: 'demo', default_strategy: null, missing_value_policy: 'consult_doctor_first', suggested_doctor_question: 'Please provide Age.' }],
+      defaultable_features: [],
+      suggested_doctor_questions: ['Please provide Age.'],
+      current_assessment_status: 'awaiting_doctor_input',
+      insufficient_data_for_assessment: true,
+    };
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/model-input-validation', payload)).data;
+  return unwrapItem<ModelInputPreviewItem>(data);
+}
+
+export async function previewModelSelection(caseId: string, payload: ModelSelectionPayload): Promise<ModelSelectionPreviewResponse> {
+  if (API_MODE === 'mock') {
+    return {
+      status: 'ok',
+      route: '/api/v1/cases/' + caseId + '/model-selection-preview',
+      disease_task: payload.disease_task,
+      selection_required: payload.candidate_model_version_ids.length > 1,
+      selection_reason: payload.candidate_model_version_ids.length > 1 ? 'multiple_candidates' : 'single_candidate',
+      candidate_count: payload.candidate_model_version_ids.length,
+      selected_candidate: null,
+      validation: null,
+      candidates: [],
+    };
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/model-selection-preview', payload)).data;
+  return data as ModelSelectionPreviewResponse;
+}
