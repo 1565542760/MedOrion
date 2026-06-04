@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Case, ShadowInferenceOutput, ShadowInferenceRun
 from app.db.session import SessionLocal
 from app.modules.shadow_audit.schemas import (
+    ShadowAuditWriteRequestV1,
     ShadowInferenceOutputItemV1,
     ShadowInferenceOutputListResponseV1,
     ShadowInferenceRunDetailItemV1,
@@ -16,6 +17,7 @@ from app.modules.shadow_audit.schemas import (
     ShadowInferenceRunItemV1,
     ShadowInferenceRunListResponseV1,
 )
+from app.modules.shadow_audit.service import create_shadow_audit_record
 
 router = APIRouter()
 
@@ -43,16 +45,22 @@ def _output_item(row: ShadowInferenceOutput) -> ShadowInferenceOutputItemV1:
     return ShadowInferenceOutputItemV1.model_validate(row)
 
 
+@router.post('/shadow-inference-runs/dev-record', response_model=ShadowInferenceRunDetailResponseV1)
+def create_shadow_run_dev_record(payload: ShadowAuditWriteRequestV1, db: Session = Depends(get_db)) -> ShadowInferenceRunDetailResponseV1:
+    result = create_shadow_audit_record(db, payload)
+    db.commit()
+    return ShadowInferenceRunDetailResponseV1(
+        status='ok',
+        route='/api/v1/shadow-inference-runs/dev-record',
+        item=ShadowInferenceRunDetailItemV1.model_validate({**result.run.model_dump(), 'outputs': result.outputs}),
+    )
+
+
 @router.get('/shadow-inference-runs/{shadow_run_id}', response_model=ShadowInferenceRunDetailResponseV1)
 def get_shadow_run(shadow_run_id: str, db: Session = Depends(get_db)) -> ShadowInferenceRunDetailResponseV1:
-    run = db.execute(
-        select(ShadowInferenceRun).where(ShadowInferenceRun.shadow_run_id == shadow_run_id)
-    ).scalar_one_or_none()
+    run = db.execute(select(ShadowInferenceRun).where(ShadowInferenceRun.shadow_run_id == shadow_run_id)).scalar_one_or_none()
     if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={'code': 'shadow_run_not_found', 'message': 'Shadow run not found'},
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'shadow_run_not_found', 'message': 'Shadow run not found'})
 
     outputs = db.execute(
         select(ShadowInferenceOutput)
@@ -61,11 +69,9 @@ def get_shadow_run(shadow_run_id: str, db: Session = Depends(get_db)) -> ShadowI
     ).scalars().all()
 
     return ShadowInferenceRunDetailResponseV1(
+        status='ok',
         route='/api/v1/shadow-inference-runs/{shadow_run_id}',
-        item=ShadowInferenceRunDetailItemV1.model_validate({
-            **_run_item(run).model_dump(),
-            'outputs': [_output_item(output) for output in outputs],
-        }),
+        item=ShadowInferenceRunDetailItemV1.model_validate({**_run_item(run).model_dump(), 'outputs': [_output_item(output) for output in outputs]}),
     )
 
 
@@ -74,10 +80,7 @@ def list_shadow_runs_by_case(case_id: str, db: Session = Depends(get_db)) -> Sha
     case_uuid = _parse_uuid(case_id, 'invalid_case_id', 'Invalid case id')
     case = db.execute(select(Case).where(Case.id == case_uuid)).scalar_one_or_none()
     if case is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={'code': 'case_not_found', 'message': 'Case not found'},
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'case_not_found', 'message': 'Case not found'})
 
     runs = db.execute(
         select(ShadowInferenceRun)
@@ -99,14 +102,9 @@ def list_shadow_runs_by_trace(trace_id: str, db: Session = Depends(get_db)) -> S
 
 @router.get('/shadow-inference-runs/{shadow_run_id}/outputs', response_model=ShadowInferenceOutputListResponseV1)
 def list_shadow_outputs(shadow_run_id: str, db: Session = Depends(get_db)) -> ShadowInferenceOutputListResponseV1:
-    run = db.execute(
-        select(ShadowInferenceRun).where(ShadowInferenceRun.shadow_run_id == shadow_run_id)
-    ).scalar_one_or_none()
+    run = db.execute(select(ShadowInferenceRun).where(ShadowInferenceRun.shadow_run_id == shadow_run_id)).scalar_one_or_none()
     if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={'code': 'shadow_run_not_found', 'message': 'Shadow run not found'},
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'shadow_run_not_found', 'message': 'Shadow run not found'})
 
     outputs = db.execute(
         select(ShadowInferenceOutput)
