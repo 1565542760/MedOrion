@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import ModelRegistry, ModelVersion
+from app.db.models import CaseModelInputSnapshot, ModelRegistry, ModelVersion
 from app.db.session import SessionLocal
 from app.modules.inference.persistence import resolve_case_context
 from app.modules.model_input.catalog import DISEASE_TASK_SCHEMA_ORDER, FEATURE_SETS, MODEL_INPUT_SCHEMA_PROFILES, TASK_MODEL_FILTERS
@@ -21,6 +22,9 @@ from app.modules.model_input.schemas import (
     ModelInputSchemaItemV1,
     ModelInputValidationRequestV1,
     ModelInputValidationResponseV1,
+    ModelInputSnapshotCreateRequestV1,
+    ModelInputSnapshotItemV1,
+    ModelInputSnapshotListResponseV1,
     ModelMissingRequiredFeatureItemV1,
     ModelSelectionCandidateItemV1,
     ModelSelectionPreviewRequestV1,
@@ -468,3 +472,157 @@ def model_selection_preview(case_id: str, payload: ModelSelectionPreviewRequestV
         runtime_stub=True,
         limitations=['metadata_only', 'no_live_inference', 'llm_only_explains_not_decides'],
     )
+
+
+SNAPSHOT_STATUS_VALUES = {
+    'ready_for_inference',
+    'insufficient_data_for_assessment',
+    'missing_required_features',
+    'default_applied',
+    'doctor_confirmation_required',
+    'validation_failed',
+}
+
+
+def _snapshot_item_from_row(row: CaseModelInputSnapshot) -> ModelInputSnapshotItemV1:
+    return ModelInputSnapshotItemV1(
+        id=row.id,
+        input_snapshot_id=row.input_snapshot_id,
+        case_id=row.case_id,
+        patient_id=row.patient_id,
+        trace_id=row.trace_id,
+        model_version_id=row.model_version_id,
+        model_input_schema_id=row.model_input_schema_id,
+        disease_task_feature_set_id=row.disease_task_feature_set_id,
+        preprocess_artifact_ref=row.preprocess_artifact_ref,
+        mapped_features=row.mapped_features_json or {},
+        missing_features=list(row.missing_features_json or []),
+        defaulted_features=list(row.defaulted_features_json or []),
+        doctor_provided_features=list(row.doctor_provided_features_json or []),
+        source_refs=list(row.source_refs_json or []),
+        validation_status=row.validation_status,
+        current_assessment_status=row.current_assessment_status,
+        insufficient_data_for_assessment=bool(row.insufficient_data_for_assessment),
+        runtime_stub=bool(row.runtime_stub),
+        not_for_diagnosis=bool(row.not_for_diagnosis),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _ensure_json_compatible(value: Any, field_name: str) -> None:
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={'code': 'invalid_snapshot_payload', 'message': f'{field_name} must be JSON-compatible'},
+        ) from exc
+
+
+def _snapshot_model_version_row(db: Session, model_version_id: UUID) -> tuple[ModelRegistry, ModelVersion]:
+    version = db.execute(select(ModelVersion).where(ModelVersion.id == model_version_id)).scalar_one_or_none()
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'model_version_not_found', 'message': 'Model version not found'})
+    model = db.execute(select(ModelRegistry).where(ModelRegistry.id == version.model_id)).scalar_one_or_none()
+    if model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'model_version_not_found', 'message': 'Model version not found'})
+    return model, version
+
+
+def _snapshot_list_response(route: str, items: list[ModelInputSnapshotItemV1], total: int, limit: int, offset: int) -> ModelInputSnapshotListResponseV1:
+    return ModelInputSnapshotListResponseV1(route=route, items=items, total=total, limit=limit, offset=offset)
+
+
+@router.post('/cases/{case_id}/model-input-snapshots', response_model=ModelInputSnapshotItemV1)
+def create_model_input_snapshot(case_id: str, payload: ModelInputSnapshotCreateRequestV1, db: Session = Depends(get_db)) -> ModelInputSnapshotItemV1:
+    resolved_case_id, resolved_patient_id = _resolve_case(db, case_id)
+    _model, _version = _snapshot_model_version_row(db, payload.model_version_id)
+    schema_item = _schema_item(db, payload.model_version_id)
+    if payload.model_input_schema_id.strip() != schema_item.model_input_schema_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'invalid_model_input_schema', 'message': 'model_input_schema_id does not match the selected model_version'})
+    if payload.disease_task_feature_set_id.strip() != schema_item.disease_task_feature_set_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'invalid_disease_task_feature_set', 'message': 'disease_task_feature_set_id does not match the selected model_version'})
+
+    snapshot_payloads = [
+        ('mapped_features', payload.mapped_features),
+        ('missing_features', payload.missing_features),
+        ('defaulted_features', payload.defaulted_features),
+        ('doctor_provided_features', payload.doctor_provided_features),
+        ('source_refs', payload.source_refs),
+    ]
+    for field_name, value in snapshot_payloads:
+        _ensure_json_compatible(value, field_name)
+
+    snapshot = CaseModelInputSnapshot(
+        input_snapshot_id=f'snap_{uuid4().hex[:16]}',
+        case_id=resolved_case_id,
+        patient_id=resolved_patient_id,
+        trace_id=payload.trace_id.strip(),
+        model_version_id=payload.model_version_id,
+        model_input_schema_id=payload.model_input_schema_id.strip(),
+        disease_task_feature_set_id=payload.disease_task_feature_set_id.strip(),
+        preprocess_artifact_ref=payload.preprocess_artifact_ref.strip() if payload.preprocess_artifact_ref else None,
+        mapped_features_json=dict(payload.mapped_features),
+        missing_features_json=list(payload.missing_features),
+        defaulted_features_json=list(payload.defaulted_features),
+        doctor_provided_features_json=list(payload.doctor_provided_features),
+        source_refs_json=list(payload.source_refs),
+        validation_status=payload.validation_status,
+        current_assessment_status=payload.current_assessment_status,
+        insufficient_data_for_assessment=payload.insufficient_data_for_assessment,
+        runtime_stub=True,
+        not_for_diagnosis=True,
+    )
+
+    try:
+        db.add(snapshot)
+        db.commit()
+        db.refresh(snapshot)
+    except Exception:
+        db.rollback()
+        raise
+    return _snapshot_item_from_row(snapshot)
+
+
+@router.get('/model-input-snapshots/{input_snapshot_id}', response_model=ModelInputSnapshotItemV1)
+def get_model_input_snapshot(input_snapshot_id: str, db: Session = Depends(get_db)) -> ModelInputSnapshotItemV1:
+    row = db.execute(select(CaseModelInputSnapshot).where(CaseModelInputSnapshot.input_snapshot_id == input_snapshot_id)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'input_snapshot_not_found', 'message': 'Input snapshot not found'})
+    return _snapshot_item_from_row(row)
+
+
+@router.get('/cases/{case_id}/model-input-snapshots', response_model=ModelInputSnapshotListResponseV1)
+def list_case_model_input_snapshots(case_id: str, limit: int = Query(20, ge=1, le=200), offset: int = Query(0, ge=0), model_version_id: UUID | None = Query(default=None), db: Session = Depends(get_db)) -> ModelInputSnapshotListResponseV1:
+    resolved_case_id, _ = _resolve_case(db, case_id)
+    filters = [CaseModelInputSnapshot.case_id == resolved_case_id]
+    if model_version_id is not None:
+        filters.append(CaseModelInputSnapshot.model_version_id == model_version_id)
+    total = db.execute(select(func.count()).select_from(CaseModelInputSnapshot).where(*filters)).scalar_one()
+    rows = db.execute(
+        select(CaseModelInputSnapshot)
+        .where(*filters)
+        .order_by(CaseModelInputSnapshot.created_at.desc(), CaseModelInputSnapshot.id.desc())
+        .limit(limit)
+        .offset(offset)
+    ).scalars().all()
+    items = [_snapshot_item_from_row(row) for row in rows]
+    return _snapshot_list_response(f'/api/v1/cases/{case_id}/model-input-snapshots', items, total, limit, offset)
+
+
+@router.get('/traces/{trace_id}/model-input-snapshots', response_model=ModelInputSnapshotListResponseV1)
+def list_trace_model_input_snapshots(trace_id: str, limit: int = Query(20, ge=1, le=200), offset: int = Query(0, ge=0), model_version_id: UUID | None = Query(default=None), db: Session = Depends(get_db)) -> ModelInputSnapshotListResponseV1:
+    filters = [CaseModelInputSnapshot.trace_id == trace_id]
+    if model_version_id is not None:
+        filters.append(CaseModelInputSnapshot.model_version_id == model_version_id)
+    total = db.execute(select(func.count()).select_from(CaseModelInputSnapshot).where(*filters)).scalar_one()
+    rows = db.execute(
+        select(CaseModelInputSnapshot)
+        .where(*filters)
+        .order_by(CaseModelInputSnapshot.created_at.desc(), CaseModelInputSnapshot.id.desc())
+        .limit(limit)
+        .offset(offset)
+    ).scalars().all()
+    items = [_snapshot_item_from_row(row) for row in rows]
+    return _snapshot_list_response(f'/api/v1/traces/{trace_id}/model-input-snapshots', items, total, limit, offset)

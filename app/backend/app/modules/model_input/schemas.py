@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -170,3 +170,56 @@ class ModelSelectionPreviewResponseV1(BaseModel):
     candidates: list[ModelSelectionCandidateItemV1] = Field(default_factory=list)
     runtime_stub: bool = True
     limitations: list[str] = Field(default_factory=list)
+
+
+class ModelInputSnapshotCreateRequestV1(BaseModel):
+    trace_id: str = Field(min_length=1)
+    model_version_id: UUID
+    model_input_schema_id: str = Field(min_length=1)
+    disease_task_feature_set_id: str = Field(min_length=1)
+    preprocess_artifact_ref: str | None = None
+    mapped_features: dict[str, Any] = Field(default_factory=dict)
+    missing_features: list[Any] = Field(default_factory=list)
+    defaulted_features: list[Any] = Field(default_factory=list)
+    doctor_provided_features: list[Any] = Field(default_factory=list)
+    source_refs: list[Any] = Field(default_factory=list)
+    validation_status: Literal['ready_for_inference', 'insufficient_data_for_assessment', 'missing_required_features', 'default_applied', 'doctor_confirmation_required', 'validation_failed']
+    current_assessment_status: Literal['ready_for_inference', 'insufficient_data_for_assessment', 'missing_required_features', 'default_applied', 'doctor_confirmation_required', 'validation_failed']
+    insufficient_data_for_assessment: bool = False
+    runtime_stub: Literal[True] = True
+    not_for_diagnosis: Literal[True] = True
+
+
+class ModelInputSnapshotItemV1(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    input_snapshot_id: str
+    case_id: UUID
+    patient_id: UUID
+    trace_id: str
+    model_version_id: UUID
+    model_input_schema_id: str
+    disease_task_feature_set_id: str
+    preprocess_artifact_ref: str | None = None
+    mapped_features: dict[str, Any] = Field(default_factory=dict)
+    missing_features: list[Any] = Field(default_factory=list)
+    defaulted_features: list[Any] = Field(default_factory=list)
+    doctor_provided_features: list[Any] = Field(default_factory=list)
+    source_refs: list[Any] = Field(default_factory=list)
+    validation_status: str
+    current_assessment_status: str
+    insufficient_data_for_assessment: bool = False
+    runtime_stub: bool = True
+    not_for_diagnosis: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class ModelInputSnapshotListResponseV1(BaseModel):
+    status: str = 'ok'
+    route: str
+    total: int
+    limit: int
+    offset: int
+    items: list[ModelInputSnapshotItemV1] = Field(default_factory=list)
