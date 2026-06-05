@@ -190,6 +190,31 @@ class ModelInputSnapshotCreateRequestV1(BaseModel):
     not_for_diagnosis: Literal[True] = True
 
 
+class ModelInputSnapshotSummaryItemV1(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    input_snapshot_id: str
+    case_id: UUID
+    patient_id: UUID
+    trace_id: str
+    model_version_id: UUID
+    model_input_schema_id: str
+    disease_task_feature_set_id: str
+    validation_status: str
+    current_assessment_status: str
+    insufficient_data_for_assessment: bool = False
+    runtime_stub: bool = True
+    not_for_diagnosis: bool = True
+    mapped_feature_count: int = 0
+    missing_feature_count: int = 0
+    defaulted_feature_count: int = 0
+    doctor_provided_feature_count: int = 0
+    source_ref_count: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class ModelInputSnapshotItemV1(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -222,4 +247,4 @@ class ModelInputSnapshotListResponseV1(BaseModel):
     total: int
     limit: int
     offset: int
-    items: list[ModelInputSnapshotItemV1] = Field(default_factory=list)
+    items: list[ModelInputSnapshotSummaryItemV1] = Field(default_factory=list)
