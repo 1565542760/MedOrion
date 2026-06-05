@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import CaseModelInputSnapshot, ModelRegistry, ModelVersion, User
 from app.db.session import SessionLocal
+from app.core.access_control import require_case_access, require_snapshot_access
 from app.modules.auth.dependencies import require_roles
 from app.modules.inference.persistence import resolve_case_context
 from app.modules.model_input.catalog import DISEASE_TASK_SCHEMA_ORDER, FEATURE_SETS, MODEL_INPUT_SCHEMA_PROFILES, TASK_MODEL_FILTERS
@@ -574,6 +575,7 @@ def _snapshot_list_response(route: str, items: list[ModelInputSnapshotSummaryIte
 @router.post('/cases/{case_id}/model-input-snapshots', response_model=ModelInputSnapshotItemV1)
 def create_model_input_snapshot(case_id: str, payload: ModelInputSnapshotCreateRequestV1, db: Session = Depends(get_db), actor: User = Depends(snapshot_write_guard)) -> ModelInputSnapshotItemV1:
     resolved_case_id, resolved_patient_id = _resolve_case(db, case_id)
+    require_case_access(db, actor, resolved_case_id, access_level='detail')
     _snapshot_model_version_row(db, payload.model_version_id)
     schema_item = _schema_item(db, payload.model_version_id)
     if payload.model_input_schema_id.strip() != schema_item.model_input_schema_id:
@@ -627,12 +629,14 @@ def get_model_input_snapshot(input_snapshot_id: str, db: Session = Depends(get_d
     row = db.execute(select(CaseModelInputSnapshot).where(CaseModelInputSnapshot.input_snapshot_id == input_snapshot_id)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'input_snapshot_not_found', 'message': 'Input snapshot not found'})
+    require_snapshot_access(db, actor, row, mode='detail')
     return _snapshot_item_from_row(row)
 
 
 @router.get('/cases/{case_id}/model-input-snapshots', response_model=ModelInputSnapshotListResponseV1)
 def list_case_model_input_snapshots(case_id: str, limit: int = Query(20, ge=1, le=200), offset: int = Query(0, ge=0), model_version_id: UUID | None = Query(default=None), db: Session = Depends(get_db), actor: User = Depends(snapshot_read_guard)) -> ModelInputSnapshotListResponseV1:
     resolved_case_id, _ = _resolve_case(db, case_id)
+    require_case_access(db, actor, resolved_case_id, access_level='summary')
     filters = [CaseModelInputSnapshot.case_id == resolved_case_id]
     if model_version_id is not None:
         filters.append(CaseModelInputSnapshot.model_version_id == model_version_id)
@@ -661,5 +665,7 @@ def list_trace_model_input_snapshots(trace_id: str, limit: int = Query(20, ge=1,
         .limit(limit)
         .offset(offset)
     ).scalars().all()
+    for case_uuid in {row.case_id for row in rows}:
+        require_case_access(db, actor, case_uuid, access_level='summary')
     items = [_snapshot_summary_item_from_row(row) for row in rows]
     return _snapshot_list_response(f'/api/v1/traces/{trace_id}/model-input-snapshots', items, total, limit, offset)
