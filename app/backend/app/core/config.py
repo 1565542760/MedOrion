@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     cap_cop_clinical_mlp_shadow_force_no_grad: bool = True
     cap_cop_clinical_mlp_shadow_force_eval_mode: bool = True
     cap_cop_clinical_mlp_shadow_disable_gpu: bool = True
+    cap_cop_clinical_mlp_shadow_canonical_adapter_code: str = 'clinical_mlp_cap_cop_adapter'
+    cap_cop_clinical_mlp_shadow_runtime_adapter_code: str = 'cap_cop_clinical_mlp_fold5_shadow'
+    cap_cop_clinical_mlp_shadow_accepted_adapter_codes: list[str] = [
+        'clinical_mlp_cap_cop_adapter',
+        'cap_cop_clinical_mlp_fold5_shadow',
+    ]
     cap_cop_clinical_mlp_shadow_allowed_model_version_ids: list[UUID] = []
     log_level: str = 'INFO'
 

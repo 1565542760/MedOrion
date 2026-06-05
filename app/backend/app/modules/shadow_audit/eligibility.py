@@ -13,7 +13,6 @@ from app.db.enums import ModelApprovalState
 from app.db.models import ModelRegistry, ModelVersion
 from app.modules.model_input.router import build_model_input_assessment_from_schema, build_model_input_schema_for_version
 
-_EXPECTED_ADAPTER_CODE = 'cap_cop_clinical_mlp_fold5_shadow'
 _ALLOWED_MODEL_STATES = {
     ModelApprovalState.APPROVED.value,
     'offline_evaluated',
@@ -32,7 +31,7 @@ class ShadowEligibilityResult:
     not_for_diagnosis: bool = True
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             'status': self.status,
             'reason': self.reason,
             'details': self.details,
@@ -41,6 +40,11 @@ class ShadowEligibilityResult:
             'runtime_stub': self.runtime_stub,
             'not_for_diagnosis': self.not_for_diagnosis,
         }
+        if isinstance(self.details, dict):
+            for key in ('canonical_adapter_code', 'runtime_adapter_code', 'accepted_adapter_codes', 'registry_adapter_code', 'canonical_match', 'registry_match', 'runtime_match', 'adapter_match'):
+                if key in self.details:
+                    result[key] = self.details[key]
+        return result
 
 
 # Safety note: an empty allowlist is intentionally fail-closed.
@@ -67,6 +71,66 @@ def _artifact_metadata(version: ModelVersion) -> dict[str, Any]:
     if isinstance(raw, str) and raw.strip():
         return {'artifact_uri': raw.strip()}
     return {}
+
+
+def _normalize_adapter_code(value: Any) -> str:
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def _normalize_adapter_codes(values: Any) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        candidate = _normalize_adapter_code(values)
+        return [candidate] if candidate else []
+    if isinstance(values, (list, tuple, set, frozenset)):
+        normalized: list[str] = []
+        for value in values:
+            candidate = _normalize_adapter_code(value)
+            if candidate and candidate not in normalized:
+                normalized.append(candidate)
+        return normalized
+    candidate = _normalize_adapter_code(values)
+    return [candidate] if candidate else []
+
+
+def _is_metadata_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, frozenset, dict)):
+        return len(value) == 0
+    return False
+
+
+def evaluate_adapter_governance(
+    *,
+    registry_adapter_code: Any = None,
+    runtime_adapter_code: Any = None,
+) -> dict[str, Any]:
+    canonical_adapter_code = _normalize_adapter_code(settings.cap_cop_clinical_mlp_shadow_canonical_adapter_code)
+    runtime_adapter_code_normalized = _normalize_adapter_code(
+        runtime_adapter_code or settings.cap_cop_clinical_mlp_shadow_runtime_adapter_code,
+    )
+    accepted_adapter_codes = _normalize_adapter_codes(settings.cap_cop_clinical_mlp_shadow_accepted_adapter_codes)
+    registry_adapter_code_normalized = _normalize_adapter_code(registry_adapter_code)
+    canonical_match = bool(canonical_adapter_code) and registry_adapter_code_normalized == canonical_adapter_code
+    registry_match = bool(registry_adapter_code_normalized) and registry_adapter_code_normalized in accepted_adapter_codes
+    runtime_match = bool(runtime_adapter_code_normalized) and runtime_adapter_code_normalized in accepted_adapter_codes
+    adapter_match = registry_match and runtime_match
+    return {
+        'canonical_adapter_code': canonical_adapter_code,
+        'runtime_adapter_code': runtime_adapter_code_normalized,
+        'accepted_adapter_codes': accepted_adapter_codes,
+        'registry_adapter_code': registry_adapter_code_normalized or None,
+        'canonical_match': canonical_match,
+        'registry_match': registry_match,
+        'runtime_match': runtime_match,
+        'adapter_match': adapter_match,
+    }
 
 
 def _candidate_model(db: Session, model_version_id: UUID) -> tuple[ModelRegistry, ModelVersion]:
@@ -102,6 +166,8 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
         )
 
     model, version = _candidate_model(db, model_version_id)
+    metadata = _artifact_metadata(version)
+    adapter_governance = evaluate_adapter_governance(registry_adapter_code=metadata.get('adapter_code'))
     allowlist = {str(value) for value in settings.cap_cop_clinical_mlp_shadow_allowed_model_version_ids}
     if not allowlist:
         return ShadowEligibilityResult(
@@ -112,6 +178,7 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
                 'allowlist_empty': True,
                 'allowlist_size': 0,
                 'approval_state': str(version.approval_state),
+                **adapter_governance,
             },
             eligible=False,
             runtime_safety_config=runtime_safety_config,
@@ -125,6 +192,7 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
                 'allowlist_empty': False,
                 'allowlist_size': len(allowlist),
                 'approval_state': str(version.approval_state),
+                **adapter_governance,
             },
             eligible=False,
             runtime_safety_config=runtime_safety_config,
@@ -138,12 +206,12 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
                 'model_version_id': str(version.id),
                 'approval_state': str(version.approval_state),
                 'allowed_states': sorted(_ALLOWED_MODEL_STATES),
+                **adapter_governance,
             },
             eligible=False,
             runtime_safety_config=runtime_safety_config,
         )
 
-    metadata = _artifact_metadata(version)
     required_metadata_fields = [
         'artifact_uri',
         'artifact_hash',
@@ -153,7 +221,7 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
         'registered_at',
         'adapter_code',
     ]
-    missing_metadata_fields = [field for field in required_metadata_fields if metadata.get(field) in {None, '', [], {}}]
+    missing_metadata_fields = [field for field in required_metadata_fields if _is_metadata_missing(metadata.get(field))]
     if missing_metadata_fields:
         status_code = 'artifact_hash_missing' if 'artifact_hash' in missing_metadata_fields else 'artifact_metadata_incomplete'
         return ShadowEligibilityResult(
@@ -164,20 +232,19 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
                 'model_id': str(model.id),
                 'missing_metadata_fields': missing_metadata_fields,
                 'artifact_metadata': {key: metadata.get(key) for key in required_metadata_fields},
+                **adapter_governance,
             },
             eligible=False,
             runtime_safety_config=runtime_safety_config,
         )
 
-    adapter_code = str(metadata.get('adapter_code') or '').strip()
-    if adapter_code != _EXPECTED_ADAPTER_CODE:
+    if not adapter_governance['adapter_match']:
         return ShadowEligibilityResult(
             status='adapter_mismatch',
             reason='Artifact adapter code does not match the controlled shadow adapter',
             details={
                 'model_version_id': str(version.id),
-                'adapter_code': adapter_code or None,
-                'expected_adapter_code': _EXPECTED_ADAPTER_CODE,
+                **adapter_governance,
             },
             eligible=False,
             runtime_safety_config=runtime_safety_config,
@@ -196,6 +263,7 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
                     'model_version_id': str(version.id),
                     'model_id': str(model.id),
                     'detail': detail,
+                    **adapter_governance,
                 },
                 eligible=False,
                 runtime_safety_config=runtime_safety_config,
@@ -207,6 +275,7 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
                 'model_version_id': str(version.id),
                 'model_id': str(model.id),
                 'detail': detail,
+                **adapter_governance,
             },
             eligible=False,
             runtime_safety_config=runtime_safety_config,
@@ -222,6 +291,7 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
                 'model_version_id': str(version.id),
                 'supported_modalities': sorted(supported_modalities),
                 'requested_modalities': sorted(requested_modalities),
+                **adapter_governance,
             },
             eligible=False,
             runtime_safety_config=runtime_safety_config,
@@ -240,6 +310,7 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
                 'defaultable_features': assessment.defaultable_features,
                 'suggested_doctor_questions': assessment.suggested_doctor_questions,
                 'default_strategy_available': assessment.default_strategy_available,
+                **adapter_governance,
             },
             eligible=False,
             runtime_safety_config=runtime_safety_config,
@@ -258,6 +329,7 @@ def evaluate_cap_cop_clinical_mlp_shadow_eligibility(
             'supported_modalities': list(schema_item.supported_modalities),
             'default_strategy_available': assessment.default_strategy_available,
             'current_assessment_status': assessment.current_assessment_status,
+            **adapter_governance,
         },
         eligible=True,
         runtime_safety_config=runtime_safety_config,

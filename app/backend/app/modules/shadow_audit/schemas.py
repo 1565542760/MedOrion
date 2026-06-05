@@ -111,6 +111,10 @@ class ShadowEligibilityGateItemV1(BaseModel):
     eligible: bool = False
     reason: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+    canonical_adapter_code: str | None = None
+    runtime_adapter_code: str | None = None
+    accepted_adapter_codes: list[str] = Field(default_factory=list)
+    adapter_match: bool = False
     runtime_stub: bool = True
     not_for_diagnosis: bool = True
     runtime_safety_config: RuntimeSafetyConfigItemV1 = Field(default_factory=RuntimeSafetyConfigItemV1)

@@ -30,7 +30,7 @@ _ALLOWED_STATUSES = {
     'shadow_model_not_enabled',
 }
 
-_CONTROLLED_SHADOW_ADAPTER_CODE = 'cap_cop_clinical_mlp_fold5_shadow'
+_CONTROLLED_SHADOW_ADAPTER_CODE = settings.cap_cop_clinical_mlp_shadow_runtime_adapter_code
 
 
 @dataclass(frozen=True)
@@ -110,9 +110,22 @@ def create_shadow_audit_record(db: Session, payload: ShadowAuditWriteRequestV1) 
     if not trace_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'invalid_trace_id', 'message': 'trace_id is required'})
 
+    shadow_run_id = f'shadow_{uuid5(NAMESPACE_URL, f"{trace_id}:{case_uuid}:{model_version_uuid}:{payload.adapter_code}").hex[:16]}'
+    existing_run = db.execute(select(ShadowInferenceRun).where(ShadowInferenceRun.shadow_run_id == shadow_run_id)).scalar_one_or_none()
+    if existing_run is not None:
+        existing_outputs = db.execute(
+            select(ShadowInferenceOutput)
+            .where(ShadowInferenceOutput.shadow_run_id == shadow_run_id)
+            .order_by(ShadowInferenceOutput.created_at.asc(), ShadowInferenceOutput.output_id.asc())
+        ).scalars().all()
+        return ShadowAuditWriteResult(
+            run=ShadowInferenceRunItemV1.model_validate(existing_run),
+            outputs=[ShadowInferenceOutputItemV1.model_validate(output) for output in existing_outputs],
+        )
+
     patient_uuid = _parse_uuid(payload.patient_id, 'invalid_patient_id', 'Invalid patient id') if payload.patient_id else db.execute(select(Case.patient_id).where(Case.id == case_uuid)).scalar_one()
     run = ShadowInferenceRun(
-        shadow_run_id=f'shadow_{uuid5(NAMESPACE_URL, f"{trace_id}:{case_uuid}:{model_version_uuid}:{payload.adapter_code}").hex[:16]}',
+        shadow_run_id=shadow_run_id,
         trace_id=trace_id,
         case_id=case_uuid,
         patient_id=patient_uuid,
@@ -180,6 +193,7 @@ def run_controlled_cap_cop_clinical_mlp_shadow(
     )
 
     runtime_safety_config = runtime_safety_config_summary()
+    adapter_governance = eligibility_preview.details if isinstance(eligibility_preview.details, dict) else {}
     limitations = [
         'shadow_audit_only',
         'not_for_diagnosis',
@@ -205,6 +219,10 @@ def run_controlled_cap_cop_clinical_mlp_shadow(
         'available_modalities': list(payload.available_modalities),
         'runtime_options_json': dict(payload.runtime_options_json or {}),
         'runtime_safety_config': runtime_safety_config,
+        'canonical_adapter_code': adapter_governance.get('canonical_adapter_code'),
+        'runtime_adapter_code': adapter_governance.get('runtime_adapter_code'),
+        'accepted_adapter_codes': adapter_governance.get('accepted_adapter_codes', []),
+        'adapter_match': adapter_governance.get('adapter_match', False),
         'eligibility_status': eligibility_preview.status,
         'eligibility_reason': eligibility_preview.reason,
         'eligibility_details': eligibility_preview.details,
