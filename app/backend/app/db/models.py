@@ -49,8 +49,17 @@ class Patient(Base, TimestampMixin):
     )
 
 
+
 class Case(Base, TimestampMixin):
     __tablename__ = 'cases'
+    __table_args__ = (
+        Index('ix_cases_owner_user_id', 'owner_user_id'),
+        Index('ix_cases_primary_doctor_id', 'primary_doctor_id'),
+        Index('ix_cases_organization_id', 'organization_id'),
+        Index('ix_cases_access_policy_status', 'access_policy_status'),
+        Index('ix_cases_created_by', 'created_by'),
+        Index('ix_cases_updated_by', 'updated_by'),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('patients.id'), nullable=False)
@@ -62,6 +71,37 @@ class Case(Base, TimestampMixin):
     context_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     opened_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    primary_doctor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    organization_id: Mapped[str | None] = mapped_column(String(64))
+    access_policy_status: Mapped[str | None] = mapped_column(String(32))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+
+
+class CaseAssignment(Base, TimestampMixin):
+    __tablename__ = 'case_assignments'
+    __table_args__ = (
+        UniqueConstraint('assignment_id', name='uq_case_assignments_assignment_id'),
+        Index('ix_case_assignments_case_id', 'case_id'),
+        Index('ix_case_assignments_user_id', 'user_id'),
+        Index('ix_case_assignments_role_on_case', 'role_on_case'),
+        Index('ix_case_assignments_assignment_status', 'assignment_status'),
+        Index('ix_case_assignments_case_user_id', 'case_id', 'user_id'),
+        Index('ix_case_assignments_case_role_on_case', 'case_id', 'role_on_case'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    assignment_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('users.id'), nullable=False)
+    role_on_case: Mapped[str] = mapped_column(String(64), nullable=False)
+    assignment_status: Mapped[str] = mapped_column(String(32), nullable=False, default='active')
+    assigned_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    assigned_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    revoked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(Text)
 
 
 class MultimodalAsset(Base, TimestampMixin):
