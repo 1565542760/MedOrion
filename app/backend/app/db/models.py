@@ -248,6 +248,40 @@ class ShadowInferenceOutput(Base):
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class CaseModelInputSnapshot(Base, TimestampMixin):
+    __tablename__ = 'case_model_input_snapshots'
+    __table_args__ = (
+        UniqueConstraint('input_snapshot_id', name='uq_case_model_input_snapshots_input_snapshot_id'),
+        Index('ix_case_model_input_snapshots_case_id', 'case_id'),
+        Index('ix_case_model_input_snapshots_patient_id', 'patient_id'),
+        Index('ix_case_model_input_snapshots_trace_id', 'trace_id'),
+        Index('ix_case_model_input_snapshots_model_version_id', 'model_version_id'),
+        Index('ix_case_model_input_snapshots_case_created_at', 'case_id', 'created_at'),
+        Index('ix_case_model_input_snapshots_trace_model_version', 'trace_id', 'model_version_id'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    input_snapshot_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('patients.id'), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    model_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('model_versions.id'), nullable=False)
+    model_input_schema_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    disease_task_feature_set_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    preprocess_artifact_ref: Mapped[str | None] = mapped_column(String(512))
+    mapped_features_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    missing_features_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    defaulted_features_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    doctor_provided_features_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    source_refs_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    validation_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    current_assessment_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    insufficient_data_for_assessment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    runtime_stub: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    not_for_diagnosis: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+
 class InferenceTask(Base, TimestampMixin):
     __tablename__ = 'inference_tasks'
     __table_args__ = (
