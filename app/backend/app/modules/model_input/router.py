@@ -670,7 +670,7 @@ def get_model_input_snapshot(input_snapshot_id: str, request: Request, db: Sessi
                 case_id=row.case_id,
                 patient_id=row.patient_id,
                 trace_id=row.trace_id,
-                denial_reason=_http_detail_code(exc),
+                denial_reason='access_denied',
                 policy_source='denied_no_policy',
                 request_id=_request_audit_id(request),
                 route_path=str(request.url.path),
