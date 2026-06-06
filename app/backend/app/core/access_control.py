@@ -6,11 +6,20 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Case, CaseModelInputSnapshot, User
+from app.db.models import Case, CaseAssignment, CaseModelInputSnapshot, User
 
 SUMMARY_ACCESS_ROLES = {'doctor', 'admin', 'model_reviewer', 'qa_reviewer', 'super_admin'}
 DETAIL_ACCESS_ROLES = {'doctor', 'admin', 'model_reviewer', 'qa_reviewer', 'super_admin'}
 ADMIN_ACCESS_ROLES = {'admin', 'super_admin'}
+
+CASE_ASSIGNMENT_ACCESS_LEVELS = {
+    'owner': {'summary', 'detail'},
+    'primary_doctor': {'summary', 'detail'},
+    'consulting_doctor': {'summary', 'detail'},
+    'qc_reviewer': {'summary'},
+    'auditor': {'summary'},
+    'admin_delegate': {'summary', 'detail', 'admin'},
+}
 
 _ACCESS_LEVEL_ROLES = {
     'summary': SUMMARY_ACCESS_ROLES,
@@ -45,9 +54,34 @@ def _require_role(user: User, access_level: str) -> None:
         )
 
 
+def _has_case_ownership_policy(db: Session, case_uuid: UUID) -> bool:
+    case_policy = db.execute(
+        select(Case.owner_user_id, Case.primary_doctor_id).where(Case.id == case_uuid)
+    ).first()
+    if case_policy is None:
+        return False
+    owner_user_id, primary_doctor_id = case_policy
+    if owner_user_id is not None or primary_doctor_id is not None:
+        return True
+    active_assignment_exists = db.execute(
+        select(CaseAssignment.id)
+        .where(CaseAssignment.case_id == case_uuid)
+        .where(CaseAssignment.assignment_status == 'active')
+        .limit(1)
+    ).scalar_one_or_none()
+    return active_assignment_exists is not None
+
+
+def _assignment_allows_access(role_on_case: str | None, access_level: str) -> bool:
+    normalized_role = (role_on_case or '').strip().lower()
+    allowed_levels = CASE_ASSIGNMENT_ACCESS_LEVELS.get(normalized_role)
+    if allowed_levels is None:
+        return False
+    return access_level in allowed_levels
+
+
 def require_case_access(db: Session, user: User, case_id: UUID | str, access_level: str = 'summary') -> Case:
     case_uuid = _normalize_case_id(case_id)
-    _require_role(user, access_level)
 
     case = db.execute(select(Case).where(Case.id == case_uuid)).scalar_one_or_none()
     if case is None:
@@ -56,10 +90,45 @@ def require_case_access(db: Session, user: User, case_id: UUID | str, access_lev
             detail={'code': 'case_not_found', 'message': 'Case not found'},
         )
 
-    # TODO(stage 105+): enforce ownership / assignment / care-team membership when those fields exist.
-    #   - case_owner_user_id
-    #   - assigned_doctor_ids
-    #   - care_team_ids
+    if access_level not in _ACCESS_LEVEL_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={'code': 'invalid_access_level', 'message': f'Unknown access level: {access_level}'},
+        )
+
+    if user.role in ADMIN_ACCESS_ROLES:
+        # TODO(stage 105+): add tenant / org scope checks before treating admin as global.
+        return case
+
+    # Ownership-aware path: once a case has explicit ownership or active assignments,
+    # stop relying on dev fallback and evaluate the case-level policy.
+    if case.owner_user_id == user.id or case.primary_doctor_id == user.id:
+        if access_level == 'admin':
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={'code': 'access_denied', 'message': 'Insufficient role'},
+            )
+        return case
+
+    ownership_policy_present = _has_case_ownership_policy(db, case_uuid)
+    if ownership_policy_present:
+        active_assignment_roles = db.execute(
+            select(CaseAssignment.role_on_case)
+            .where(CaseAssignment.case_id == case_uuid)
+            .where(CaseAssignment.user_id == user.id)
+            .where(CaseAssignment.assignment_status == 'active')
+        ).scalars().all()
+        for role_on_case in active_assignment_roles:
+            if _assignment_allows_access(role_on_case, access_level):
+                return case
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={'code': 'access_denied', 'message': 'Insufficient case ownership or assignment'},
+        )
+
+    # Dev/stub fallback: preserve current stage-104 compatibility for cases that do not yet
+    # have production ownership policy rows. This must not be treated as the final policy.
+    _require_role(user, access_level)
     return case
 
 
