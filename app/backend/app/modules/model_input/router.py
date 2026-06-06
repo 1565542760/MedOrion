@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+import logging
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import CaseModelInputSnapshot, ModelRegistry, ModelVersion, User
 from app.db.session import SessionLocal
-from app.core.access_control import require_case_access, require_snapshot_access
+from app.core.access_audit import emit_access_audit_event
+from app.core.access_control import require_case_access, require_snapshot_access, resolve_case_access_policy_source
 from app.modules.auth.dependencies import require_roles
 from app.modules.inference.persistence import resolve_case_context
 from app.modules.model_input.catalog import DISEASE_TASK_SCHEMA_ORDER, FEATURE_SETS, MODEL_INPUT_SCHEMA_PROFILES, TASK_MODEL_FILTERS
@@ -35,6 +37,7 @@ from app.modules.model_input.schemas import (
 )
 
 router = APIRouter()
+logger = logging.getLogger('app.model_input')
 
 SNAPSHOT_READ_ROLES = ['doctor', 'admin', 'model_reviewer', 'qa_reviewer', 'super_admin']
 SNAPSHOT_WRITE_ROLES = ['doctor', 'admin', 'super_admin']
@@ -572,6 +575,30 @@ def _snapshot_list_response(route: str, items: list[ModelInputSnapshotSummaryIte
     return ModelInputSnapshotListResponseV1(route=route, items=items, total=total, limit=limit, offset=offset)
 
 
+def _request_audit_id(request: Request) -> str | None:
+    return request.headers.get('x-request-id') or request.headers.get('x-correlation-id')
+
+
+def _snapshot_audit_metadata(snapshot: CaseModelInputSnapshot, *, reason: str | None = None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        'model_input_schema_id': snapshot.model_input_schema_id,
+        'disease_task_feature_set_id': snapshot.disease_task_feature_set_id,
+        'validation_status': snapshot.validation_status,
+        'current_assessment_status': snapshot.current_assessment_status,
+        'insufficient_data_for_assessment': snapshot.insufficient_data_for_assessment,
+        'runtime_stub': snapshot.runtime_stub,
+        'not_for_diagnosis': snapshot.not_for_diagnosis,
+        'mapped_feature_count': len(snapshot.mapped_features_json or {}),
+        'missing_feature_count': len(snapshot.missing_features_json or []),
+        'defaulted_feature_count': len(snapshot.defaulted_features_json or []),
+        'doctor_provided_feature_count': len(snapshot.doctor_provided_features_json or []),
+        'source_ref_count': len(snapshot.source_refs_json or []),
+    }
+    if reason:
+        metadata['reason'] = reason
+    return metadata
+
+
 @router.post('/cases/{case_id}/model-input-snapshots', response_model=ModelInputSnapshotItemV1)
 def create_model_input_snapshot(case_id: str, payload: ModelInputSnapshotCreateRequestV1, db: Session = Depends(get_db), actor: User = Depends(snapshot_write_guard)) -> ModelInputSnapshotItemV1:
     resolved_case_id, resolved_patient_id = _resolve_case(db, case_id)
@@ -625,12 +652,54 @@ def create_model_input_snapshot(case_id: str, payload: ModelInputSnapshotCreateR
 
 
 @router.get('/model-input-snapshots/{input_snapshot_id}', response_model=ModelInputSnapshotItemV1)
-def get_model_input_snapshot(input_snapshot_id: str, db: Session = Depends(get_db), actor: User = Depends(snapshot_read_guard)) -> ModelInputSnapshotItemV1:
+def get_model_input_snapshot(input_snapshot_id: str, request: Request, db: Session = Depends(get_db), actor: User = Depends(snapshot_read_guard)) -> ModelInputSnapshotItemV1:
     row = db.execute(select(CaseModelInputSnapshot).where(CaseModelInputSnapshot.input_snapshot_id == input_snapshot_id)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={'code': 'input_snapshot_not_found', 'message': 'Input snapshot not found'})
-    require_snapshot_access(db, actor, row, mode='detail')
-    return _snapshot_item_from_row(row)
+    try:
+        require_snapshot_access(db, actor, row, mode='detail')
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            emit_access_audit_event(
+                db,
+                actor_user=actor,
+                access_mode='detail',
+                resource_type='model_input_snapshot',
+                resource_id=row.input_snapshot_id,
+                decision='denied',
+                case_id=row.case_id,
+                patient_id=row.patient_id,
+                trace_id=row.trace_id,
+                denial_reason=_http_detail_code(exc),
+                policy_source='denied_no_policy',
+                request_id=_request_audit_id(request),
+                route_path=str(request.url.path),
+                method=request.method,
+                metadata=_snapshot_audit_metadata(row, reason='access_denied'),
+            )
+        raise
+    response = _snapshot_item_from_row(row)
+    try:
+        policy_source = resolve_case_access_policy_source(db, actor, row.case_id, access_level='detail')
+    except HTTPException:
+        policy_source = 'unknown_policy'
+    emit_access_audit_event(
+        db,
+        actor_user=actor,
+        access_mode='detail',
+        resource_type='model_input_snapshot',
+        resource_id=row.input_snapshot_id,
+        decision='allowed',
+        case_id=row.case_id,
+        patient_id=row.patient_id,
+        trace_id=row.trace_id,
+        policy_source=policy_source,
+        request_id=_request_audit_id(request),
+        route_path=str(request.url.path),
+        method=request.method,
+        metadata=_snapshot_audit_metadata(row),
+    )
+    return response
 
 
 @router.get('/cases/{case_id}/model-input-snapshots', response_model=ModelInputSnapshotListResponseV1)

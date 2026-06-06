@@ -138,3 +138,54 @@ def require_snapshot_access(db: Session, user: User, snapshot: CaseModelInputSna
 
     # TODO(stage 105+): snapshot-specific ACLs if snapshot-level ownership / visibility controls are introduced.
     return snapshot
+
+
+def resolve_case_access_policy_source(db: Session, user: User, case_id: UUID | str, access_level: str = 'summary') -> str:
+    case_uuid = _normalize_case_id(case_id)
+
+    case = db.execute(select(Case).where(Case.id == case_uuid)).scalar_one_or_none()
+    if case is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={'code': 'case_not_found', 'message': 'Case not found'},
+        )
+
+    if access_level not in _ACCESS_LEVEL_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={'code': 'invalid_access_level', 'message': f'Unknown access level: {access_level}'},
+        )
+
+    if user.role in ADMIN_ACCESS_ROLES:
+        return 'admin_override'
+
+    if case.owner_user_id == user.id:
+        return 'owner'
+    if case.primary_doctor_id == user.id:
+        return 'primary_doctor'
+
+    ownership_policy_present = _has_case_ownership_policy(db, case_uuid)
+    if ownership_policy_present:
+        active_assignment_roles = db.execute(
+            select(CaseAssignment.role_on_case)
+            .where(CaseAssignment.case_id == case_uuid)
+            .where(CaseAssignment.user_id == user.id)
+            .where(CaseAssignment.assignment_status == 'active')
+        ).scalars().all()
+        for role_on_case in active_assignment_roles:
+            normalized_role = (role_on_case or '').strip().lower()
+            if _assignment_allows_access(role_on_case, access_level):
+                if normalized_role == 'admin_delegate':
+                    return 'admin_override'
+                if normalized_role == 'qc_reviewer':
+                    return 'assignment'
+                if normalized_role == 'auditor':
+                    return 'assignment'
+                if normalized_role == 'consulting_doctor':
+                    return 'assignment'
+                if normalized_role == 'primary_doctor':
+                    return 'primary_doctor'
+                return 'assignment'
+        return 'denied_no_policy'
+
+    return 'dev_fallback'
