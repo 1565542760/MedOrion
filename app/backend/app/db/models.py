@@ -176,6 +176,48 @@ class EmrDocument(Base, TimestampMixin):
     authored_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
 
 
+
+
+class AccessAuditEvent(Base):
+    __tablename__ = 'access_audit_events'
+    __table_args__ = (
+        UniqueConstraint('access_event_id', name='uq_access_audit_events_access_event_id'),
+        Index('ix_access_audit_events_actor_user_id', 'actor_user_id'),
+        Index('ix_access_audit_events_case_id', 'case_id'),
+        Index('ix_access_audit_events_patient_id', 'patient_id'),
+        Index('ix_access_audit_events_trace_id', 'trace_id'),
+        Index('ix_access_audit_events_resource_type', 'resource_type'),
+        Index('ix_access_audit_events_resource_id', 'resource_id'),
+        Index('ix_access_audit_events_decision', 'decision'),
+        Index('ix_access_audit_events_access_mode', 'access_mode'),
+        Index('ix_access_audit_events_created_at', 'created_at'),
+        Index('ix_access_audit_events_case_created_at', 'case_id', 'created_at'),
+        Index('ix_access_audit_events_actor_created_at', 'actor_user_id', 'created_at'),
+        Index('ix_access_audit_events_resource_type_resource_id', 'resource_type', 'resource_id'),
+        Index('ix_access_audit_events_decision_created_at', 'decision', 'created_at'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    access_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('users.id'))
+    actor_type: Mapped[str | None] = mapped_column(String(64))
+    actor_role: Mapped[str | None] = mapped_column(String(32))
+    access_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_id: Mapped[str | None] = mapped_column(String(128))
+    case_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('cases.id'))
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('patients.id'))
+    trace_id: Mapped[str | None] = mapped_column(String(96))
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    denial_reason: Mapped[str | None] = mapped_column(String(64))
+    policy_source: Mapped[str | None] = mapped_column(String(64))
+    request_id: Mapped[str | None] = mapped_column(String(128))
+    route_path: Mapped[str | None] = mapped_column(String(256))
+    method: Mapped[str | None] = mapped_column(String(16))
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class ModelRegistry(Base, TimestampMixin):
     __tablename__ = 'model_registry'
 
