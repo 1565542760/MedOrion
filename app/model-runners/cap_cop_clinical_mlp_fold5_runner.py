@@ -121,16 +121,19 @@ def _materialize_features(feature_columns: list[str], mapped_features: Any) -> t
     return values, missing
 
 
-def _apply_standard_scaler(feature_columns: list[str], values: list[float], preprocess_payload: dict[str, Any]) -> list[float]:
+def _apply_standard_scaler(feature_columns: list[str], values: list[float], preprocess_payload: dict[str, Any]) -> tuple[list[float], bool]:
     scaler = preprocess_payload.get('standard_scaler')
     if not isinstance(scaler, dict):
-        return values
+        return values, False
     mean = scaler.get('mean')
     scale = scaler.get('scale')
     if not isinstance(mean, dict) or not isinstance(scale, dict):
-        return values
+        return values, False
     adjusted: list[float] = []
+    applied = False
     for column, value in zip(feature_columns, values):
+        if column in mean or column in scale:
+            applied = True
         mean_value = mean.get(column, 0.0)
         scale_value = scale.get(column, 1.0)
         try:
@@ -145,7 +148,7 @@ def _apply_standard_scaler(feature_columns: list[str], values: list[float], prep
             adjusted.append(float(value) - mean_float)
         else:
             adjusted.append((float(value) - mean_float) / scale_float)
-    return adjusted
+    return adjusted, applied
 
 
 def _compute_sha256(path: Path) -> str:
@@ -260,7 +263,7 @@ def main() -> int:
         model.load_state_dict(state_dict, strict=True)
         model.eval()
 
-        scaled_values = _apply_standard_scaler(feature_columns, feature_values, preprocess_payload)
+        scaled_values, preprocess_applied = _apply_standard_scaler(feature_columns, feature_values, preprocess_payload)
         tensor = torch.tensor([scaled_values], dtype=torch.float32, device='cpu')
         with torch.no_grad():
             raw_output = model(tensor)
@@ -293,7 +296,7 @@ def main() -> int:
             'candidate_label': candidate_label,
             'confidence': {'max_probability': round(confidence, 6)},
             'uncertainty': {'one_minus_max_probability': round(uncertainty, 6)},
-            'limitations': ['not_for_diagnosis', 'shadow_only', 'not_formal_recommendation'],
+            'limitations': ['not_for_diagnosis', 'shadow_only', 'not_formal_recommendation'] + (['preprocess_artifact_not_applied'] if not preprocess_applied else []),
             'runtime': {
                 'python_path': sys.executable,
                 'torch_version': getattr(torch, '__version__', 'unknown'),

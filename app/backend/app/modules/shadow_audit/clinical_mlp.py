@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.db.models import Case, CaseModelInputSnapshot, ModelRegistry, ModelVersion, User
 from app.modules.model_input.router import build_model_input_assessment_from_schema, build_model_input_schema_for_version
 from app.modules.shadow_audit.schemas import ShadowAuditWriteRequestV1
+from app.modules.shadow_audit.runner_bridge import invoke_fold5_runner
 from app.modules.shadow_audit.service import ShadowAuditWriteResult, create_shadow_audit_record
 
 LOGGER = logging.getLogger('app.shadow_audit.clinical_mlp_one_shot')
@@ -317,7 +318,7 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             },
             output=None,
             dry_run_label=payload.dry_run_label,
-            mode='one_shot_fold5',
+            mode='one_shot_fold5_mri3d_subprocess',
             assessment=assessment,
             torch_available=False,
         )
@@ -343,13 +344,32 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             },
             output=None,
             dry_run_label=payload.dry_run_label,
-            mode='one_shot_fold5',
+            mode='one_shot_fold5_mri3d_subprocess',
             assessment=assessment,
             torch_available=False,
         )
 
-    torch_spec = importlib.util.find_spec('torch')
-    if torch_spec is None:
+    runner_request = {
+        'trace_id': trace_id,
+        'case_id': str(case_uuid),
+        'patient_id': str(case.patient_id),
+        'input_snapshot_id': snapshot.input_snapshot_id,
+        'model_version_id': str(version.id),
+        'mapped_features': [snapshot.mapped_features_json.get(feature.model_feature_name) for feature in schema_item.feature_requirements],
+        'not_for_diagnosis': True,
+    }
+    if payload.dry_run_label:
+        runner_request['dry_run_label'] = payload.dry_run_label
+
+    runner_result = invoke_fold5_runner(runner_request)
+    if runner_result.payload is None:
+        runner_error_code = runner_result.error_code or 'runner_unavailable'
+        if runner_error_code == 'runner_timeout':
+            status_code = 'shadow_timeout'
+            error_code = 'runner_timeout'
+        else:
+            status_code = 'shadow_failed'
+            error_code = runner_error_code
         return _write_shadow_audit(
             db,
             case_uuid=case_uuid,
@@ -358,206 +378,134 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             version=version,
             schema_item=schema_item,
             trace_id=trace_id,
-            status='shadow_failed',
-            error_code='torch_runtime_unavailable',
+            status=status_code,
+            error_code=error_code,
             error_detail={
-                'code': 'torch_runtime_unavailable',
-                'message': 'torch is not available in the backend runtime',
-                'expected_weight_path': str(WEIGHT_PATH),
-                'expected_preprocess_artifact_path': str(_preprocess_path(snapshot)),
-                'dry_run_label': payload.dry_run_label,
-                'candidate_model_version_id': str(version.id),
-            },
-            output=None,
-            dry_run_label=payload.dry_run_label,
-            mode='one_shot_fold5',
-            assessment=assessment,
-            torch_available=False,
-        )
-
-    preprocess_path = _preprocess_path(snapshot)
-    if not preprocess_path.exists():
-        return _write_shadow_audit(
-            db,
-            case_uuid=case_uuid,
-            case=case,
-            snapshot=snapshot,
-            version=version,
-            schema_item=schema_item,
-            trace_id=trace_id,
-            status='shadow_failed',
-            error_code='preprocess_artifact_not_found',
-            error_detail={
-                'code': 'preprocess_artifact_not_found',
-                'message': 'Preprocess artifact not found',
-                'expected_preprocess_artifact_path': str(preprocess_path),
-            },
-            output=None,
-            dry_run_label=payload.dry_run_label,
-            mode='one_shot_fold5',
-            assessment=assessment,
-            torch_available=True,
-        )
-
-    expected_hash = _artifact_hash_from_version(version)
-    if expected_hash not in {'', 'metadata_only'} and WEIGHT_PATH.exists():
-        sha256_hasher = hashlib.sha256()
-        with WEIGHT_PATH.open('rb') as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-                sha256_hasher.update(chunk)
-        actual_hash_hex = sha256_hasher.hexdigest()
-        if actual_hash_hex != expected_hash:
-            return _write_shadow_audit(
-                db,
-                case_uuid=case_uuid,
-                case=case,
-                snapshot=snapshot,
-                version=version,
-                schema_item=schema_item,
-                trace_id=trace_id,
-                status='shadow_failed',
-                error_code='artifact_hash_mismatch',
-                error_detail={
-                    'code': 'artifact_hash_mismatch',
-                    'message': 'Artifact hash mismatch before model loading',
-                    'expected_artifact_hash': expected_hash,
-                    'actual_artifact_hash': actual_hash_hex,
-                },
-                output=None,
-                dry_run_label=payload.dry_run_label,
-                mode='one_shot_fold5',
-                assessment=assessment,
-                torch_available=True,
-            )
-
-    try:
-        import torch  # type: ignore
-    except Exception as exc:
-        LOGGER.exception('torch import failed unexpectedly for fold5 one-shot shadow')
-        return _write_shadow_audit(
-            db,
-            case_uuid=case_uuid,
-            case=case,
-            snapshot=snapshot,
-            version=version,
-            schema_item=schema_item,
-            trace_id=trace_id,
-            status='shadow_failed',
-            error_code='torch_runtime_unavailable',
-            error_detail={
-                'code': 'torch_runtime_unavailable',
-                'message': 'torch is not available in the backend runtime',
-                'exception': str(exc),
-            },
-            output=None,
-            dry_run_label=payload.dry_run_label,
-            mode='one_shot_fold5',
-            assessment=assessment,
-            torch_available=False,
-        )
-
-    try:
-        with EXECUTION_LOCK:
-            loaded = torch.load(str(WEIGHT_PATH), map_location='cpu')
-            if hasattr(loaded, 'eval') and callable(getattr(loaded, 'eval')):
-                model_obj = loaded
-            elif isinstance(loaded, dict) and hasattr(loaded.get('model'), 'eval'):
-                model_obj = loaded['model']
-            else:
-                raise RuntimeError('unsupported_artifact_payload')
-
-            if hasattr(model_obj, 'eval'):
-                model_obj.eval()
-            vector = _build_feature_vector(schema_item, assessment.mapped_features)
-            preprocess_meta = _json_load(preprocess_path)
-            vector = _apply_preprocess(vector, preprocess_meta)
-            tensor = torch.tensor([vector], dtype=torch.float32)
-            with torch.no_grad():
-                raw_output = model_obj(tensor) if callable(model_obj) else model_obj.forward(tensor)
-            if hasattr(raw_output, 'detach'):
-                raw_values = [float(value) for value in raw_output.detach().cpu().reshape(-1).tolist()]
-            elif isinstance(raw_output, (list, tuple)):
-                raw_values = [float(value) for value in raw_output]
-            else:
-                raw_values = [float(raw_output)]
-            if len(raw_values) == 1:
-                logit = raw_values[0]
-                p_cop = 1.0 / (1.0 + math.exp(-logit))
-                p_cap = 1.0 - p_cop
-            else:
-                first_two = raw_values[:2]
-                max_value = max(first_two)
-                exp_values = [math.exp(value - max_value) for value in first_two]
-                total = sum(exp_values) or 1.0
-                p_cap = exp_values[0] / total
-                p_cop = exp_values[1] / total if len(exp_values) > 1 else 1.0 - p_cap
-            candidate_label = 'COP' if p_cop >= p_cap else 'CAP'
-            output = {
-                'prediction_raw_json': {
-                    'raw_output_values': raw_values,
-                    'candidate_model_version_id': str(version.id),
-                    'input_snapshot_id': snapshot.input_snapshot_id,
-                    'trace_id': trace_id,
-                    'model_input_schema_id': schema_item.model_input_schema_id,
-                    'disease_task_feature_set_id': schema_item.disease_task_feature_set_id,
-                    'feature_count': schema_item.feature_count,
-                    'mapped_feature_count': assessment.mapped_feature_count,
-                    'dry_run_label': payload.dry_run_label,
-                },
-                'prediction_probability_json': {'CAP': round(p_cap, 6), 'COP': round(p_cop, 6)},
-                'candidate_label': candidate_label,
-                'confidence_json': {'confidence': round(max(p_cap, p_cop), 6), 'positive_class': 'COP', 'negative_class': 'CAP'},
-                'uncertainty_json': {'note': 'one-shot_shadow_no_grad_eval_cpu_only', 'source': 'controlled_one_shot'},
-                'limitations_json': {'items': ['shadow_audit_only', 'not_for_diagnosis', 'one_shot_fold5', 'cpu_only', 'no_grad', 'eval_mode', 'batch_size_1']},
-                'input_quality_flags_json': {
-                    'missing_required_features': list(assessment.missing_required_features),
-                    'default_strategy_available': bool(assessment.default_strategy_available),
-                    'requires_doctor_confirmation': bool(assessment.requires_doctor_confirmation),
-                    'dry_run_label': payload.dry_run_label,
-                },
-            }
-            return _write_shadow_audit(
-                db,
-                case_uuid=case_uuid,
-                case=case,
-                snapshot=snapshot,
-                version=version,
-                schema_item=schema_item,
-                trace_id=trace_id,
-                status='shadow_success',
-                error_code=None,
-                error_detail={
-                    'code': 'shadow_success',
-                    'message': 'Fold5 one-shot shadow execution completed successfully',
-                    'dry_run_label': payload.dry_run_label,
-                },
-                output=output,
-                dry_run_label=payload.dry_run_label,
-                mode='one_shot_fold5',
-                assessment=assessment,
-                torch_available=True,
-            )
-    except Exception as exc:
-        LOGGER.exception('Fold5 one-shot shadow execution failed')
-        return _write_shadow_audit(
-            db,
-            case_uuid=case_uuid,
-            case=case,
-            snapshot=snapshot,
-            version=version,
-            schema_item=schema_item,
-            trace_id=trace_id,
-            status='shadow_failed',
-            error_code='runtime_inference_error',
-            error_detail={
-                'code': 'runtime_inference_error',
-                'message': 'Controlled one-shot shadow execution failed',
-                'exception': str(exc),
+                'code': error_code,
+                'message': runner_result.error_message or 'Fold5 one-shot runner invocation failed',
+                'runner_command': runner_result.command,
+                'runner_exit_code': runner_result.exit_code,
                 'dry_run_label': payload.dry_run_label,
             },
             output=None,
             dry_run_label=payload.dry_run_label,
-            mode='one_shot_fold5',
+            mode='one_shot_fold5_mri3d_subprocess',
             assessment=assessment,
-            torch_available=True,
+            torch_available=False,
         )
+
+    runner_payload = runner_result.payload
+    runner_status = str(runner_payload.get('status') or '').strip().lower()
+    if runner_status != 'success':
+        runner_error_code = str(runner_payload.get('error_code') or runner_result.error_code or 'invalid_runner_response').strip() or 'invalid_runner_response'
+        if runner_error_code == 'input_insufficient':
+            status_code = 'shadow_insufficient_input'
+            audit_error_code = 'insufficient_data_for_assessment'
+        elif runner_error_code == 'runner_timeout':
+            status_code = 'shadow_timeout'
+            audit_error_code = 'runner_timeout'
+        else:
+            status_code = 'shadow_failed'
+            audit_error_code = runner_error_code
+        return _write_shadow_audit(
+            db,
+            case_uuid=case_uuid,
+            case=case,
+            snapshot=snapshot,
+            version=version,
+            schema_item=schema_item,
+            trace_id=trace_id,
+            status=status_code,
+            error_code=audit_error_code,
+            error_detail={
+                'code': audit_error_code,
+                'message': str(runner_payload.get('error_message') or runner_result.error_message or 'Fold5 runner reported an error'),
+                'runner_error_code': runner_error_code,
+                'runner_exit_code': runner_result.exit_code,
+                'runner_command': runner_result.command,
+                'dry_run_label': payload.dry_run_label,
+            },
+            output=None,
+            dry_run_label=payload.dry_run_label,
+            mode='one_shot_fold5_mri3d_subprocess',
+            assessment=assessment,
+            torch_available=False,
+        )
+
+    probabilities = runner_payload.get('probabilities') if isinstance(runner_payload.get('probabilities'), dict) else {}
+    confidence = runner_payload.get('confidence') if isinstance(runner_payload.get('confidence'), dict) else {}
+    uncertainty = runner_payload.get('uncertainty') if isinstance(runner_payload.get('uncertainty'), dict) else {}
+    limitations = runner_payload.get('limitations')
+    if isinstance(limitations, list):
+        limitations_items = [str(item) for item in limitations]
+    elif isinstance(limitations, dict):
+        items = limitations.get('items')
+        limitations_items = [str(item) for item in items] if isinstance(items, list) else [str(limitations)]
+    else:
+        limitations_items = []
+    output = {
+        'prediction_raw_json': {
+            'runner_status': runner_status,
+            'candidate_model_version_id': str(version.id),
+            'input_snapshot_id': snapshot.input_snapshot_id,
+            'trace_id': trace_id,
+            'model_input_schema_id': schema_item.model_input_schema_id,
+            'disease_task_feature_set_id': schema_item.disease_task_feature_set_id,
+            'feature_count': schema_item.feature_count,
+            'mapped_feature_count': assessment.mapped_feature_count,
+            'dry_run_label': payload.dry_run_label,
+            'runner_runtime': runner_payload.get('runtime') if isinstance(runner_payload.get('runtime'), dict) else {},
+            'logits': runner_payload.get('logits') if isinstance(runner_payload.get('logits'), list) else [],
+        },
+        'prediction_probability_json': {
+            'CAP': float(probabilities.get('CAP', 0.0)),
+            'COP': float(probabilities.get('COP', 0.0)),
+        },
+        'candidate_label': str(runner_payload.get('candidate_label') or '').strip() or None,
+        'confidence_json': {
+            'confidence': float(confidence.get('max_probability', 0.0)),
+            'positive_class': 'COP',
+            'negative_class': 'CAP',
+        },
+        'uncertainty_json': {
+            'one_minus_max_probability': float(uncertainty.get('one_minus_max_probability', 1.0)),
+            'runner_note': str(uncertainty.get('note') or 'one-shot_shadow_no_grad_eval_cpu_only'),
+        },
+        'limitations_json': {
+            'items': limitations_items,
+            'runner_mode': 'mri3d_subprocess',
+            'not_for_diagnosis': True,
+            'shadow_only': True,
+            'not_formal_recommendation': True,
+        },
+        'input_quality_flags_json': {
+            'missing_required_features': list(assessment.missing_required_features),
+            'default_strategy_available': bool(assessment.default_strategy_available),
+            'requires_doctor_confirmation': bool(assessment.requires_doctor_confirmation),
+            'preprocess_artifact_applied': True,
+            'runner_exit_code': runner_result.exit_code,
+            'dry_run_label': payload.dry_run_label,
+        },
+    }
+    return _write_shadow_audit(
+        db,
+        case_uuid=case_uuid,
+        case=case,
+        snapshot=snapshot,
+        version=version,
+        schema_item=schema_item,
+        trace_id=trace_id,
+        status='shadow_success',
+        error_code=None,
+        error_detail={
+            'code': 'shadow_success',
+            'message': 'Fold5 one-shot shadow execution completed successfully',
+            'dry_run_label': payload.dry_run_label,
+            'runner_exit_code': runner_result.exit_code,
+        },
+        output=output,
+        dry_run_label=payload.dry_run_label,
+        mode='one_shot_fold5_mri3d_subprocess',
+        assessment=assessment,
+        torch_available=False,
+    )

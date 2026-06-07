@@ -109,6 +109,9 @@ services:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     volumes:
       - ${MEDORION_DEPLOY_ROOT:-/srv/medorion}/logs/backend:/app/logs
+      - ${MEDORION_DEPLOY_ROOT:-/srv/medorion}/models:/srv/medorion/models:ro
+      - ${MEDORION_DEPLOY_ROOT:-/srv/medorion}/app/model-runners:/srv/medorion/app/model-runners:ro
+      - /home/sygxdg/miniconda3/envs/MRI3D:/home/sygxdg/miniconda3/envs/MRI3D:ro
     networks:
       - app
       - data

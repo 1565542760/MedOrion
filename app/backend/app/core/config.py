@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     redis_url: str = 'redis://127.0.0.1:6379/0'
     s3_endpoint_url: str = 'http://127.0.0.1:9000'
     model_service_url: str = 'http://127.0.0.1:8100'
+    cap_cop_clinical_mlp_runner_python_path: str = '/home/sygxdg/miniconda3/envs/MRI3D/bin/python'
+    cap_cop_clinical_mlp_runner_script_path: str = '/srv/medorion/app/model-runners/cap_cop_clinical_mlp_fold5_runner.py'
+    cap_cop_clinical_mlp_runner_timeout_seconds: int = 15
     enable_cap_cop_clinical_mlp_shadow: bool = False
     cap_cop_clinical_mlp_shadow_cpu_only: bool = True
     cap_cop_clinical_mlp_shadow_batch_size: int = 1
