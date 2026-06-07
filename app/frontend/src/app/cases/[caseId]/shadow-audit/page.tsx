@@ -15,7 +15,6 @@ import {
 } from '@/lib/api';
 
 type ShadowRow = ShadowInferenceRunItem;
-
 type ProbabilityMap = Record<string, unknown>;
 
 const LIMITATION_LABELS: Record<string, string> = {
@@ -78,9 +77,7 @@ function formatProbability(value: unknown) {
 }
 
 function extractLimitations(value: unknown) {
-  if (Array.isArray(value)) {
-    return value.map((item) => String(item));
-  }
+  if (Array.isArray(value)) return value.map((item) => String(item));
   if (isRecord(value)) {
     const parts: string[] = [];
     for (const [key, item] of Object.entries(value)) {
@@ -96,9 +93,7 @@ function extractLimitations(value: unknown) {
     }
     return parts;
   }
-  if (typeof value === 'string' && value.trim() !== '') {
-    return [value];
-  }
+  if (typeof value === 'string' && value.trim() !== '') return [value];
   return [] as string[];
 }
 
@@ -109,13 +104,11 @@ function limitationTagText(flag: string) {
     const label = LIMITATION_LABELS[key.trim()] || key.trim();
     return rest.trim() ? label + ': ' + rest.trim() : label;
   }
-  const label = LIMITATION_LABELS[normalized];
-  return label || normalized;
+  return LIMITATION_LABELS[normalized] || normalized;
 }
 
 function extractProbabilityMap(value: unknown): ProbabilityMap {
-  if (isRecord(value)) return value;
-  return {};
+  return isRecord(value) ? value : {};
 }
 
 function getProbability(probabilities: ProbabilityMap, key: string) {
@@ -148,6 +141,15 @@ function getRawLogits(value: unknown) {
     return (value as Record<string, unknown>).logits;
   }
   return null;
+}
+
+function renderProbabilityTag(label: string, value: unknown) {
+  const text = formatProbability(value);
+  return (
+    <Tag color='default' style={{ marginInlineEnd: 0 }}>
+      {label}: {text}
+    </Tag>
+  );
 }
 
 export default function Page({ params }: { params: Promise<{ caseId: string }> }) {
@@ -195,16 +197,14 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
         const shouldExpand = nextFocus ? [nextFocus.shadow_run_id] : (nextRuns.length === 1 ? [nextRuns[0].shadow_run_id] : []);
         setExpandedRowKeys(shouldExpand);
 
-        const outputPairs = await Promise.all(
-          nextRuns.map(async (run) => {
-            try {
-              const data = await getShadowRunOutputs(run.shadow_run_id);
-              return [run.shadow_run_id, data.items || [], ''] as const;
-            } catch (error) {
-              return [run.shadow_run_id, [], translateError(error)] as const;
-            }
-          })
-        );
+        const outputPairs = await Promise.all(nextRuns.map(async (run) => {
+          try {
+            const data = await getShadowRunOutputs(run.shadow_run_id);
+            return [run.shadow_run_id, data.items || [], ''] as const;
+          } catch (error) {
+            return [run.shadow_run_id, [], translateError(error)] as const;
+          }
+        }));
 
         if (!active) return;
         setOutputsByRunId(Object.fromEntries(outputPairs.map(([runId, items]) => [runId, items])) as Record<string, ShadowInferenceRunOutputItem[]>);
@@ -228,10 +228,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
     return runs.filter((run) => run.trace_id === traceId);
   }, [runs, traceId]);
 
-  const featuredRun = useMemo(() => {
-    if (focusRun) return focusRun;
-    return filteredRuns[0] || null;
-  }, [focusRun, filteredRuns]);
+  const featuredRun = useMemo(() => focusRun || filteredRuns[0] || null, [focusRun, filteredRuns]);
 
   const featuredOutput = useMemo(() => {
     if (!featuredRun) return null;
@@ -247,6 +244,11 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
   const notExternallyValidated = limitationFlags.some((flag) => flag === 'not_externally_validated');
   const requiresDoctorReview = limitationFlags.some((flag) => flag === 'requires_doctor_review');
   const requiresQualityReview = limitationFlags.some((flag) => flag === 'requires_quality_review_before_clinical_use');
+  const extraSafetyNotes = [
+    notExternallyValidated ? '该输出未经过外部验证。' : null,
+    requiresDoctorReview ? '需要医生复核。' : null,
+    requiresQualityReview ? '需要在临床使用前完成质控审查。' : null,
+  ].filter(Boolean) as string[];
 
   const columns = [
     { title: 'shadow_run_id', dataIndex: 'shadow_run_id' },
@@ -262,13 +264,25 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
     { title: 'error_code', dataIndex: 'error_code', render: (value: string | null | undefined) => renderText(value) },
   ];
 
+  const provenanceItems = [
+    { label: 'shadow_run_id', value: featuredRun?.shadow_run_id },
+    { label: 'output_id', value: featuredOutput?.output_id },
+    { label: 'model_version_id', value: featuredRun?.model_version_id },
+    { label: 'input_snapshot_id', value: featuredRun?.input_snapshot_id },
+    { label: 'artifact_hash', value: featuredRun?.artifact_hash },
+    { label: 'adapter_code', value: featuredRun?.adapter_code },
+    { label: 'status', value: featuredRun?.status },
+    { label: 'started_at', value: featuredRun?.started_at },
+    { label: 'created_at', value: featuredRun?.created_at },
+  ];
+
   return (
     <Space direction='vertical' size={16} style={{ width: '100%' }}>
       <Typography.Title level={4} style={{ margin: 0 }}>Shadow 审计查看</Typography.Title>
       <Typography.Text type='secondary'>病例：{caseId}{traceId ? ' · trace_id：' + traceId : ''}</Typography.Text>
 
       <Alert
-        type='info'
+        type='warning'
         showIcon
         message='shadow audit 是旁路审计'
         description='它不影响正式 recommendation，不是诊断结论，也不是医生替代。当前 dev record 仅用于测试和开发；runtime_stub=true 表示不是正式真实推理。'
@@ -283,101 +297,136 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
       </Card>
 
       <Card title='Clinical MLP CAP/COP Shadow Result'>
-        {featuredOutput ? (
-          <Space direction='vertical' size={12} style={{ width: '100%' }}>
-            <Space wrap size={8}>
-              <Tag color='gold'>Shadow only</Tag>
-              <Tag color='volcano'>Not for diagnosis</Tag>
-              <Tag color='blue'>Not a formal recommendation</Tag>
-              <Tag color='geekblue'>Requires doctor review</Tag>
-              <Tag color='purple'>Requires quality review before clinical use</Tag>
-            </Space>
+        <Space direction='vertical' size={12} style={{ width: '100%' }}>
+          <Alert
+            type='warning'
+            showIcon
+            message='安全警示'
+            description={
+              <Space direction='vertical' size={2}>
+                <Typography.Text>Shadow only</Typography.Text>
+                <Typography.Text>Not for diagnosis</Typography.Text>
+                <Typography.Text>Not a formal recommendation</Typography.Text>
+                <Typography.Text>Probability is uncalibrated</Typography.Text>
+                <Typography.Text>Extreme probability is not clinical certainty</Typography.Text>
+                <Typography.Text>Not externally validated</Typography.Text>
+                <Typography.Text>Requires doctor review</Typography.Text>
+                <Typography.Text>Requires quality review before clinical use</Typography.Text>
+              </Space>
+            }
+          />
 
-            <Alert
-              type='warning'
-              showIcon
-              message='仅供 shadow 审计和医生复核参考'
-              description={
-                <Space direction='vertical' size={2}>
-                  <Typography.Text>这是旁路审计结果，不影响正式 recommendation，不是诊断结论，也不是医生替代。</Typography.Text>
-                  <Typography.Text>当前 dev record 用于测试/开发；runtime_stub=true 表示不是正式真实推理。</Typography.Text>
+          {featuredOutput ? (
+            <Space direction='vertical' size={12} style={{ width: '100%' }}>
+              <Card size='small' title='模型旁路候选标签' styles={{ body: { paddingTop: 12 } }}>
+                <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                  <Typography.Text type='secondary'>Shadow candidate label</Typography.Text>
+                  <Tag color='gold' style={{ marginInlineEnd: 0 }}>{renderText(featuredOutput.candidate_label)}</Tag>
+                  <Typography.Text type='secondary'>候选标签仅用于旁路审计参考，不是诊断结论，也不是正式推荐。</Typography.Text>
                 </Space>
-              }
-            />
+              </Card>
 
-            {probabilityUncalibrated || extremeProbabilityWarning || notExternallyValidated || requiresDoctorReview || requiresQualityReview ? (
-              <Alert
-                type='warning'
-                showIcon
-                message='概率与临床使用警示'
-                description={
-                  <Space direction='vertical' size={2}>
-                    {probabilityUncalibrated ? <Typography.Text>概率未校准。</Typography.Text> : null}
-                    {extremeProbabilityWarning ? <Typography.Text>极端概率不等于临床确定性。</Typography.Text> : null}
-                    {notExternallyValidated ? <Typography.Text>该输出未经过外部验证。</Typography.Text> : null}
-                    <Typography.Text>仅供 shadow 审计和医生复核参考。</Typography.Text>
-                    {requiresDoctorReview ? <Typography.Text>需要医生复核。</Typography.Text> : null}
-                    {requiresQualityReview ? <Typography.Text>需要在临床使用前完成质控审查。</Typography.Text> : null}
+              <Descriptions bordered size='small' column={2}>
+                <Descriptions.Item label='probabilities CAP'>
+                  <Space size={8} wrap>
+                    {renderProbabilityTag('CAP', getProbability(probabilityMap, 'CAP'))}
+                    {probabilityUncalibrated ? <Tag color='orange'>未校准</Tag> : null}
                   </Space>
-                }
+                </Descriptions.Item>
+                <Descriptions.Item label='probabilities COP'>
+                  <Space size={8} wrap>
+                    {renderProbabilityTag('COP', getProbability(probabilityMap, 'COP'))}
+                    {probabilityUncalibrated ? <Tag color='orange'>未校准</Tag> : null}
+                  </Space>
+                </Descriptions.Item>
+                <Descriptions.Item label='confidence'>
+                  <Space direction='vertical' size={4}>
+                    <Typography.Text>{confidenceInfo.valueText}</Typography.Text>
+                    {probabilityUncalibrated ? <Typography.Text type='danger'>概率未校准</Typography.Text> : null}
+                    {extremeProbabilityWarning ? <Typography.Text type='danger'>极端概率不等于临床确定性</Typography.Text> : null}
+                  </Space>
+                </Descriptions.Item>
+                <Descriptions.Item label='uncertainty'>{renderJson(featuredOutput.uncertainty_json)}</Descriptions.Item>
+                <Descriptions.Item label='model_version_id'>{renderText(featuredRun?.model_version_id)}</Descriptions.Item>
+                <Descriptions.Item label='input_snapshot_id'>{renderText(featuredRun?.input_snapshot_id)}</Descriptions.Item>
+                <Descriptions.Item label='artifact_hash'>{renderText(featuredRun?.artifact_hash)}</Descriptions.Item>
+                <Descriptions.Item label='adapter_code'>{renderText(featuredRun?.adapter_code)}</Descriptions.Item>
+                <Descriptions.Item label='status'>{renderText(featuredRun?.status)}</Descriptions.Item>
+                <Descriptions.Item label='started_at'>{renderText(featuredRun?.started_at)}</Descriptions.Item>
+                <Descriptions.Item label='created_at'>{renderText(featuredRun?.created_at)}</Descriptions.Item>
+              </Descriptions>
+
+              <Alert
+                type='info'
+                showIcon
+                message='技术复核提示'
+                description='当前输出仅供 shadow 审计和医生复核参考，不作为临床解释主体；请结合病例上下文与医生判断。'
               />
-            ) : null}
 
-            <Descriptions bordered size='small' column={2}>
-              <Descriptions.Item label='candidate_label'>{renderText(featuredOutput.candidate_label)}</Descriptions.Item>
-              <Descriptions.Item label='probabilities CAP'>{formatProbability(getProbability(probabilityMap, 'CAP'))}</Descriptions.Item>
-              <Descriptions.Item label='probabilities COP'>{formatProbability(getProbability(probabilityMap, 'COP'))}</Descriptions.Item>
-              <Descriptions.Item label='confidence'>{confidenceInfo.valueText}</Descriptions.Item>
-              <Descriptions.Item label='uncertainty'>{renderJson(featuredOutput.uncertainty_json)}</Descriptions.Item>
-              <Descriptions.Item label='model_version_id'>{renderText(featuredRun.model_version_id)}</Descriptions.Item>
-              <Descriptions.Item label='input_snapshot_id'>{renderText(featuredRun.input_snapshot_id)}</Descriptions.Item>
-              <Descriptions.Item label='artifact_hash'>{renderText(featuredRun.artifact_hash)}</Descriptions.Item>
-              <Descriptions.Item label='adapter_code'>{renderText(featuredRun.adapter_code)}</Descriptions.Item>
-              <Descriptions.Item label='status'>{renderText(featuredRun.status)}</Descriptions.Item>
-              <Descriptions.Item label='started_at'>{renderText(featuredRun.started_at)}</Descriptions.Item>
-              <Descriptions.Item label='created_at'>{renderText(featuredRun.created_at)}</Descriptions.Item>
-            </Descriptions>
+              {extraSafetyNotes.length > 0 ? (
+                <Alert
+                  type='warning'
+                  showIcon
+                  message='补充安全说明'
+                  description={
+                    <Space direction='vertical' size={2}>
+                      {extraSafetyNotes.map((note) => (
+                        <Typography.Text key={note}>{note}</Typography.Text>
+                      ))}
+                    </Space>
+                  }
+                />
+              ) : null}
 
-            <Card size='small' title='limitations_json / warnings'>
-              {limitationFlags.length === 0 ? (
-                <Empty description='暂无限制信息' />
-              ) : (
-                <Space wrap size={8}>
-                  {limitationFlags.map((flag) => (
-                    <Tag key={flag} color='red'>
-                      {limitationTagText(flag)}
-                    </Tag>
+              <Card size='small' title='shadow audit context'>
+                <Descriptions bordered size='small' column={2}>
+                  {provenanceItems.map((item) => (
+                    <Descriptions.Item key={item.label} label={item.label}>
+                      {renderText(item.value)}
+                    </Descriptions.Item>
                   ))}
-                </Space>
-              )}
-            </Card>
+                </Descriptions>
+              </Card>
 
-            {rawLogits ? (
-              <Collapse
-                size='small'
-                items={[
-                  {
-                    key: 'raw-model-output',
-                    label: 'Raw model output (raw logits)',
-                    children: (
-                      <Space direction='vertical' size={8} style={{ width: '100%' }}>
-                        <Typography.Text type='secondary'>原始模型输出，仅用于 shadow 审计，不作为主视觉或临床结论。</Typography.Text>
-                        <Card size='small' title='logits'>
-                          {renderJson(rawLogits)}
-                        </Card>
-                        <Card size='small' title='prediction_raw_json'>
-                          {renderJson(featuredOutput.prediction_raw_json)}
-                        </Card>
-                      </Space>
-                    ),
-                  },
-                ]}
-              />
-            ) : null}
-          </Space>
-        ) : (
-          <Empty description='暂无 clinical MLP shadow 结果' />
-        )}
+              <Card size='small' title='limitations / warnings'>
+                {limitationFlags.length === 0 ? (
+                  <Empty description='暂无限制信息' />
+                ) : (
+                  <Space wrap size={8}>
+                    {limitationFlags.map((flag) => (
+                      <Tag key={flag} color='red'>{limitationTagText(flag)}</Tag>
+                    ))}
+                  </Space>
+                )}
+              </Card>
+
+              {rawLogits ? (
+                <Collapse
+                  size='small'
+                  items={[
+                    {
+                      key: 'raw-model-output',
+                      label: 'Raw model output / raw logits',
+                      children: (
+                        <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                          <Typography.Text type='secondary'>原始模型输出，仅用于审计/技术复核，不是临床解释主体。</Typography.Text>
+                          <Card size='small' title='logits'>
+                            {renderJson(rawLogits)}
+                          </Card>
+                          <Card size='small' title='prediction_raw_json'>
+                            {renderJson(featuredOutput.prediction_raw_json)}
+                          </Card>
+                        </Space>
+                      ),
+                    },
+                  ]}
+                />
+              ) : null}
+            </Space>
+          ) : (
+            <Empty description='暂无 clinical MLP shadow 结果' />
+          )}
+        </Space>
       </Card>
 
       {pageError ? <Alert type='error' showIcon message={pageError} description='请检查 shadow_run_id 或 trace_id。' /> : null}
@@ -456,3 +505,5 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
     </Space>
   );
 }
+
+
