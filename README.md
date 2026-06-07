@@ -6,9 +6,11 @@ This repository is not a real diagnostic product. It is a governed integration s
 
 ## Current Stage
 
-**Stage 80: CAP/COP clinical MLP shadow governance baseline fixed.**
+**Stage 123: CAP/COP clinical MLP shadow usable baseline.**
 
-The system can run end-to-end in local tunnel mode and supports the following MVP skeleton capabilities:
+The system can run end-to-end in local tunnel mode and now includes a usable CAP/COP clinical MLP fold5 shadow baseline. This shadow path can load the authorized fold5 artifact through a temporary CPU-only runner bridge, execute a one-shot shadow run from a validated input snapshot, write shadow audit run/output records, and display the result in the frontend shadow audit page with explicit safety warnings.
+
+The system supports the following MVP skeleton capabilities:
 
 - Auth/RBAC skeleton with development user login.
 - Formal patient and case creation.
@@ -20,8 +22,8 @@ The system can run end-to-end in local tunnel mode and supports the following MV
 - Agent Gateway skeleton with capability validation and explicit no-silent-fallback behavior.
 - Multi-agent orchestration skeleton with persistent orchestration audit tables.
 - Model input schema / feature mapping skeleton with CAP/COP validation and selection preview.
-- Shadow audit schema, read API, controlled development write skeleton, and frontend shadow audit page. Shadow governance remains NO-GO / pending sign-off / not enabled.
-- CAP/COP clinical MLP onboarding artifacts documented through dry-run, offline evaluation, shadow readiness planning, and manual sign-off / governance review.
+- Shadow audit schema, read API, controlled development write skeleton, one-shot clinical MLP shadow bridge, and frontend shadow audit page. Clinical MLP fold5 is usable as a shadow baseline only.
+- CAP/COP clinical MLP onboarding artifacts documented through dry-run, offline evaluation, metadata/provenance finalization, runner review, bridge review, output metadata review, and shadow UI review.
 
 ## What This Is Not
 
@@ -29,13 +31,13 @@ MedOrion is still not:
 
 - A real diagnosis system.
 - A production medical device.
-- A live real-model inference service.
+- A formal real-model diagnosis service.
 - An automatic training system.
 - A public internet deployment.
 - A GPU production serving stack.
 - A system that can silently choose a fallback model when the requested model or agent is unavailable.
 
-Real model work remains gated. CAP/COP clinical MLP fold5 is only a **shadow candidate**, not a default model and not a live clinical inference path. The governance status remains NO-GO / pending sign-off / not enabled.
+Real model work remains gated. CAP/COP clinical MLP fold5 is now a **usable shadow baseline**, not a default model, not canary, not a formal recommendation path, not production deployment, not externally validated, not an automatic training system, and not a doctor replacement.
 
 ## Repository Layout
 
@@ -172,13 +174,13 @@ Adapter codes:
 
 Current real-model status:
 
-- Real adapters exist only as skeleton/draft behavior.
-- Clinical MLP fold1 passed a single-artifact CPU-only structure dry-run.
-- Clinical MLP fold1-fold5 internal retrospective evaluation was completed.
-- Fold5 is the current shadow candidate.
-- Fold5 is not approved as default.
-- No real model is live in doctor-facing inference.
-- No model weights are loaded during normal system operation.
+- Clinical MLP fold5 has a usable shadow baseline through a temporary CPU-only runner bridge.
+- Clinical MLP fold5 metadata/provenance has been finalized and the authorized artifact hash has been verified.
+- Clinical MLP fold5 can produce one-shot shadow audit runs/outputs from a validated `case_model_input_snapshot`.
+- The frontend shadow audit page can display the clinical MLP shadow result with calibration and clinical-use warnings.
+- Imaging ResNet18 and multimodal ResNet18 remain unconnected to real shadow execution.
+- No model is approved as default or canary.
+- No real model is live in formal doctor-facing recommendation or diagnosis.
 
 ### CAP/COP Feature Contract
 
@@ -190,11 +192,12 @@ Model input schemas may reference the full feature set or a subset. Future model
 
 ## Shadow Audit
 
-Shadow audit is available as a controlled skeleton:
+Shadow audit is available as a controlled subsystem:
 
 - Backend schema exists.
 - Read APIs exist.
 - Controlled development write endpoint exists.
+- CAP/COP clinical MLP fold5 one-shot shadow bridge exists and writes only shadow audit records.
 - Frontend shadow audit page exists at `/cases/{case_id}/shadow-audit`. It is for shadow audit visibility only, not for live diagnosis.
 
 Shadow audit does not write formal recommendations, does not write case evidence chains by default, and does not imply clinical validity.
@@ -217,6 +220,8 @@ Do not do any of the following without explicit approval:
 - `docs/PROJECT_BOARD.md`
 - `docs/architecture/SOURCE_OF_TRUTH.md`
 - `docs/releases/MVP_SKELETON_STAGE_44_RELEASE.md`
+- `docs/releases/STAGE_123_CAP_COP_CLINICAL_MLP_SHADOW_BASELINE.md`
+- `docs/traceability/TRACEABILITY_STAGE_122_CLINICAL_MLP_SHADOW_UX_REVIEW.md`
 - `docs/model_orchestration/CAP_COP_REAL_MODEL_STAGE_57_CLINICAL_MLP_SHADOW_READINESS.md`
 - `docs/backend/MODEL_INPUT_SCHEMA_STAGE_58_CONTRACT.md`
 - `docs/backend/SHADOW_AUDIT_STAGE_64_SCHEMA_PLAN.md`

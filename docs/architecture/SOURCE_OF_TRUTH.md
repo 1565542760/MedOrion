@@ -6,9 +6,9 @@ This document defines the architectural source of truth for MedOrion at the curr
 
 ## Current Architecture Stage
 
-**Stage 80: CAP/COP clinical MLP shadow governance baseline fixed.**
+**Stage 123: CAP/COP clinical MLP shadow usable baseline.**
 
-The platform is a local-only, traceable clinical AI workflow skeleton. It can demonstrate the structure of a doctor-facing AI workbench, but it is not a real diagnostic system.
+The platform is a local-only, traceable clinical AI workflow skeleton. It can demonstrate the structure of a doctor-facing AI workbench and now includes a usable CAP/COP clinical MLP fold5 shadow baseline. It is not a real diagnostic system.
 
 ## System Components
 
@@ -55,7 +55,7 @@ Frontend owns doctor-facing workflow pages:
 - Model input preview and validation UI.
 - Shadow audit UI.
 
-Frontend must label stub/shadow/not-for-diagnosis states clearly. The current governance status for CAP/COP clinical MLP fold5 remains NO-GO / pending sign-off / not enabled.
+Frontend must label stub/shadow/not-for-diagnosis states clearly. The current CAP/COP clinical MLP fold5 path is usable only as a shadow baseline and must remain visibly separate from diagnosis, formal recommendation, default/canary, and production deployment.
 
 ## Model-Service Responsibilities
 
@@ -66,7 +66,7 @@ Model-service currently provides:
 - Registry metadata for CAP/COP skeleton versions.
 - Explicit disabled responses for real adapters.
 
-Model-service currently does not provide live real-model diagnosis. Normal operation must not load model files.
+Model-service currently does not provide live real-model diagnosis. The clinical MLP fold5 shadow baseline currently uses a temporary CPU-only runner bridge outside the long-term model-service architecture. Normal formal inference operation must not load model files.
 
 ## Data Boundary
 
@@ -140,12 +140,14 @@ Dry-run and internal retrospective evaluation do not justify default promotion.
 
 Clinical MLP:
 
-- fold1 dry-run passed.
-- fold1-fold5 retrospective evaluation completed.
-- fold5 is current shadow candidate, but it is not allowlisted and cannot be treated as enabled.
-- evidence level is low/internal retrospective.
-- not live.
-- not default.
+- fold5 metadata/provenance finalized.
+- fold5 artifact hash verified.
+- fold5 runner can load the authorized artifact and run CPU-only forward.
+- backend one-shot bridge can write `shadow_inference_runs` / `shadow_inference_outputs` from a validated `case_model_input_snapshot`.
+- frontend shadow audit page can display the result with calibration and clinical-use warnings.
+- evidence level remains low/internal retrospective; no external validation has been completed.
+- usable as shadow baseline only.
+- not diagnosis, not formal recommendation, not default, not canary, not production deployment, not automatic training, and not a doctor replacement.
 
 Imaging ResNet18 and multimodal ResNet18:
 
@@ -178,4 +180,4 @@ Before any production-like deployment, MedOrion still needs:
 
 ## Latest Governance Checkpoint
 
-`3e2a99a docs: add shadow manual signoff checklist`
+`0f8604d docs: add clinical mlp shadow ux review`

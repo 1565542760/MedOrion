@@ -1,14 +1,14 @@
 # PROJECT_BOARD
 
-Last updated: 2026-06-04 Asia/Shanghai
+Last updated: 2026-06-08 Asia/Shanghai
 
 ## Current Stage
 
-**Stage 80: CAP/COP clinical MLP shadow governance baseline fixed.**
+**Stage 123: CAP/COP clinical MLP shadow usable baseline.**
 
-The project is runnable as a local MVP skeleton. It supports doctor workbench flows, trace/evidence skeletons, model registry, agent/orchestration audit, model input validation, and shadow audit viewing. CAP/COP clinical MLP fold5 remains a shadow candidate only and is not enabled.
+The project is runnable as a local MVP skeleton. It supports doctor workbench flows, trace/evidence skeletons, model registry, agent/orchestration audit, model input validation, snapshot provenance, access audit, shadow audit viewing, and a usable CAP/COP clinical MLP fold5 shadow baseline.
 
-It is not a real diagnostic system and does not run live real-model inference in the doctor-facing path.
+It is not a real diagnostic system. The clinical MLP path is shadow only, not a formal recommendation, not default/canary, not production deployment, and not externally validated.
 
 ## Current Service State
 
@@ -53,14 +53,16 @@ Access is through SSH tunnel to port `3000`.
 | Shadow audit schema/read API | Complete |
 | Controlled shadow audit write skeleton | Complete |
 | Frontend shadow audit UI | Complete |
+| Clinical MLP fold5 shadow baseline | Complete - one-shot CPU-only bridge writes shadow audit output and frontend displays it with warnings |
+| Snapshot provenance and access audit | Complete baseline - snapshot write/read, privacy hardening, case ownership helper, access audit emit/read skeleton |
 
 ## CAP/COP Model Onboarding Board
 
 | Item | Current Status | Notes |
 | --- | --- | --- |
-| Clinical MLP adapter | Draft/disabled | Architecture and dry-run helper exist; not live |
-| Clinical MLP fold1 | Dry-run passed | Single artifact structure and dummy forward only |
-| Clinical MLP fold5 | Shadow candidate | Best retrospective fold; not default |
+| Clinical MLP adapter | Usable shadow baseline | Temporary CPU-only runner bridge, not formal recommendation or diagnosis |
+| Clinical MLP fold1 | Historical dry-run passed | Superseded by fold5 shadow baseline work |
+| Clinical MLP fold5 | Usable shadow baseline | Metadata/provenance finalized, hash verified, one-shot shadow output available; not default/canary |
 | Imaging ResNet18 adapter | Skeleton/disabled | No real loading |
 | Multimodal ResNet18 adapter | Skeleton/disabled | No real loading |
 | Feature set | `cap_cop_clinical_feature_set_v1` | 36 CAP/COP task-related fields, includes `Striated_shadow.1` |
@@ -69,8 +71,9 @@ Access is through SSH tunnel to port `3000`.
 
 ## Current Boundaries
 
-- Real adapters are disabled for live inference.
-- Fold5 is only a shadow candidate; the allowlist remains empty, so shadow execution is not enabled.
+- Real adapters remain disabled for formal live inference.
+- Clinical MLP fold5 is usable only as a shadow baseline through a temporary runner bridge.
+- Clinical MLP fold5 shadow output is not a diagnosis, not a formal recommendation, not default/canary, not production deployment, and not externally validated.
 - Shadow audit records are not formal diagnosis and are not formal recommendations.
 - Orchestration audit and shadow audit are separate from case evidence chains.
 - Missing required model features must result in consultation, explicit default strategy, or `insufficient_data_for_assessment`.
@@ -91,11 +94,12 @@ Access is through SSH tunnel to port `3000`.
 
 Short-term safe options:
 
-1. Stage 69 documentation/release checkpoint.
-2. Governance sign-off / no-go maintenance and readiness documentation, still not live/default.
-3. Frontend readability pass for model input and shadow audit pages.
-4. Admin/RBAC hardening.
-5. Deployment hardening plan: HTTPS/Nginx, backup/restore, external DB rehearsal.
+1. Stage 123 clinical MLP shadow usable baseline status/release update.
+2. Imaging ResNet18 provenance + runner plan if the goal is three-model CAP/COP shadow.
+3. Multimodal ResNet18 provenance + runner plan after imaging or in a separate reviewed lane.
+4. Model-service or inference-service migration away from the temporary MRI3D runner bridge.
+5. Clinical MLP further validation / external held-out-set plan.
+6. Access/shadow audit frontend polish.
 
 Avoid for now:
 

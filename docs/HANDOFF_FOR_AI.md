@@ -22,12 +22,16 @@ Read these before changing code:
 8. `docs/backend/MODEL_INPUT_SCHEMA_STAGE_59_SKELETON.md`
 9. `docs/backend/SHADOW_AUDIT_STAGE_64_SCHEMA_PLAN.md`
 10. `docs/traceability/TRACEABILITY_STAGE_67_SHADOW_WRITE_REVIEW.md`
+11. `docs/releases/STAGE_123_CAP_COP_CLINICAL_MLP_SHADOW_BASELINE.md`
+12. `docs/traceability/TRACEABILITY_STAGE_122_CLINICAL_MLP_SHADOW_UX_REVIEW.md`
 
 ## Current Stage
 
-**Stage 80: CAP/COP clinical MLP shadow governance baseline fixed.**
+**Stage 123: CAP/COP clinical MLP shadow usable baseline.**
 
-The system has passed MVP skeleton acceptance and now includes a governed path toward real CAP/COP model shadow evaluation. Clinical MLP fold5 is only a shadow candidate. It is not live, not default, and not doctor-facing diagnosis. The governance state is NO-GO / pending sign-off / not enabled.
+The system has passed MVP skeleton acceptance and now includes a usable CAP/COP clinical MLP fold5 shadow baseline. The fold5 path can run through a temporary CPU-only runner bridge, use a validated `case_model_input_snapshot`, write `shadow_inference_runs` / `shadow_inference_outputs`, and display the result in the frontend shadow audit page.
+
+This is still shadow only. It is not a diagnosis, not a formal recommendation, not default, not canary, not production deployment, not externally validated, not an automatic training system, and not a doctor replacement.
 
 ## Remote Server
 
@@ -127,12 +131,13 @@ CAP/COP classification is currently represented by three planned small-model fam
 
 Current status:
 
-- Clinical MLP fold1 single-file dry-run succeeded.
-- Clinical MLP fold1-fold5 internal retrospective evaluation completed.
-- Fold5 is the current shadow candidate.
-- Evidence level is low/internal retrospective; no independent held-out test has been established.
-- Adapters remain disabled for normal live inference.
-- No real model is used for doctor-facing diagnosis.
+- Clinical MLP fold5 metadata/provenance has been finalized.
+- Clinical MLP fold5 artifact hash has been verified.
+- Clinical MLP fold5 runner can load the authorized artifact and run CPU-only forward.
+- Backend one-shot bridge can write shadow success output for a validated snapshot.
+- Frontend shadow audit page can display the result with warnings.
+- Evidence level is still low/internal retrospective; no independent held-out test has been established.
+- No real model is used for formal doctor-facing diagnosis or recommendation.
 
 ## Model Input Rule
 
@@ -151,8 +156,9 @@ Allowed missing-required-field outcomes:
 ## Known Temporary Risks
 
 - Dev auth remains local/MVP-level.
-- Clinical MLP fold5 is not clinically validated for production.
-- Shadow write endpoint is controlled/development-oriented and must not be treated as production inference.
+- Clinical MLP fold5 is not clinically validated for production and its probabilities are uncalibrated.
+- Clinical MLP fold5 shadow bridge is a temporary runner bridge and must not be treated as a long-term model-serving architecture.
+- Shadow write/execution endpoints are controlled and must not be treated as production inference.
 - Shadow and orchestration audit visibility exists, but the product UX is still skeletal.
 - Real deployment hardening is not done: no HTTPS, no externalized DB plan applied, no backup/restore rehearsal.
 
@@ -160,14 +166,14 @@ Allowed missing-required-field outcomes:
 
 Reasonable next stages:
 
-1. Stage 80 shadow governance status update and release note.
-2. Stage 81 manual sign-off / enablement checklist or governed rehearsal planning, only if explicit approval is later granted.
-3. Frontend refinement for model input and shadow audit readability.
-4. Admin/RBAC hardening.
-5. Production deployment plan only after local MVP boundaries are frozen.
+1. Imaging ResNet18 provenance + runner plan if the goal is three-model CAP/COP shadow coverage.
+2. Multimodal ResNet18 provenance + runner plan after imaging or in a separately reviewed lane.
+3. Migrate the temporary clinical MLP runner bridge into model-service or a dedicated inference-service if the goal is long-term architecture.
+4. Clinical MLP further validation / external held-out-set planning if the goal is clinical reliability.
+5. Access/shadow audit frontend polish after the baseline status is frozen.
 
-Do not jump straight to real clinical diagnosis or default model serving.
+Do not jump straight to real clinical diagnosis, default model serving, canary promotion, or formal recommendation writes.
 
 ## Latest Checkpoint Before This Document
 
-`2d19ae8 feat: add shadow audit UI`
+`0f8604d docs: add clinical mlp shadow ux review`
