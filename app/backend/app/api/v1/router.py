@@ -15,6 +15,7 @@ from app.modules.patients.router import router as patients_router
 from app.modules.quality.router import router as quality_router
 from app.modules.shadow_audit.router import router as shadow_audit_router
 from app.modules.recommendations.router import router as recommendations_router
+from app.modules.access_audit.router import router as access_audit_router
 from app.modules.traces.router import router as traces_router
 
 api_router = APIRouter()
@@ -36,3 +37,4 @@ api_router.include_router(traces_router, tags=['traces'])
 api_router.include_router(quality_router, tags=['quality-reviews'])
 api_router.include_router(orchestrations_router, prefix='/orchestrations', tags=['orchestrations'])
 api_router.include_router(shadow_audit_router, tags=['shadow-audit'])
+api_router.include_router(access_audit_router, tags=['access-audit'])
