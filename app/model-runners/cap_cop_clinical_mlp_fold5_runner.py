@@ -296,7 +296,7 @@ def main() -> int:
             'candidate_label': candidate_label,
             'confidence': {'max_probability': round(confidence, 6)},
             'uncertainty': {'one_minus_max_probability': round(uncertainty, 6)},
-            'limitations': ['not_for_diagnosis', 'shadow_only', 'not_formal_recommendation'] + (['preprocess_artifact_not_applied'] if not preprocess_applied else []),
+            'limitations': ['not_for_diagnosis', 'shadow_only', 'not_formal_recommendation', 'not_externally_validated', 'internal_retrospective_evaluation_only', 'probability_uncalibrated', 'extreme_probability_not_clinical_certainty', 'requires_doctor_review', 'requires_quality_review_before_clinical_use'] + (['preprocess_artifact_not_applied'] if not preprocess_applied else []),
             'runtime': {
                 'python_path': sys.executable,
                 'torch_version': getattr(torch, '__version__', 'unknown'),

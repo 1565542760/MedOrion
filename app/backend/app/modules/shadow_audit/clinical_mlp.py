@@ -443,6 +443,16 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
         limitations_items = [str(item) for item in items] if isinstance(items, list) else [str(limitations)]
     else:
         limitations_items = []
+    augmented_limitations = list(dict.fromkeys(
+        limitations_items + [
+            'not_externally_validated',
+            'internal_retrospective_evaluation_only',
+            'probability_uncalibrated',
+            'extreme_probability_not_clinical_certainty',
+            'requires_doctor_review',
+            'requires_quality_review_before_clinical_use',
+        ]
+    ))
     output = {
         'prediction_raw_json': {
             'runner_status': runner_status,
@@ -456,27 +466,42 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             'dry_run_label': payload.dry_run_label,
             'runner_runtime': runner_payload.get('runtime') if isinstance(runner_payload.get('runtime'), dict) else {},
             'logits': runner_payload.get('logits') if isinstance(runner_payload.get('logits'), list) else [],
+            'label_mapping': runner_payload.get('label_mapping') if isinstance(runner_payload.get('label_mapping'), dict) else {'CAP': 0, 'COP': 1},
         },
         'prediction_probability_json': {
             'CAP': float(probabilities.get('CAP', 0.0)),
             'COP': float(probabilities.get('COP', 0.0)),
+            'probability_source': 'softmax_logits',
+            'calibrated': False,
         },
         'candidate_label': str(runner_payload.get('candidate_label') or '').strip() or None,
         'confidence_json': {
             'confidence': float(confidence.get('max_probability', 0.0)),
             'positive_class': 'COP',
             'negative_class': 'CAP',
+            'calibrated': False,
         },
         'uncertainty_json': {
             'one_minus_max_probability': float(uncertainty.get('one_minus_max_probability', 1.0)),
             'runner_note': str(uncertainty.get('note') or 'one-shot_shadow_no_grad_eval_cpu_only'),
         },
         'limitations_json': {
-            'items': limitations_items,
+            'items': augmented_limitations,
             'runner_mode': 'mri3d_subprocess',
             'not_for_diagnosis': True,
             'shadow_only': True,
             'not_formal_recommendation': True,
+            'not_externally_validated': True,
+            'internal_retrospective_evaluation_only': True,
+            'probability_uncalibrated': True,
+            'extreme_probability_not_clinical_certainty': True,
+            'requires_doctor_review': True,
+            'requires_quality_review_before_clinical_use': True,
+            'bridge_runtime': 'temporary_mri3d_runner',
+            'long_term_runtime_target': 'model_service_or_inference_service',
+            'model_family': 'clinical_mlp',
+            'fold': 'fold5',
+            'label_mapping': {'CAP': 0, 'COP': 1},
         },
         'input_quality_flags_json': {
             'missing_required_features': list(assessment.missing_required_features),
