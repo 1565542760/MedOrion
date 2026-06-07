@@ -1,4 +1,4 @@
-﻿import axios from 'axios';
+import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 
 type ApiMode = 'mock' | 'backend';
@@ -34,6 +34,47 @@ export function getRefreshToken(): string {
   if (typeof window === 'undefined') return '';
   return window.localStorage.getItem(REFRESH_TOKEN_KEY) || '';
 }
+
+
+export type PatientItem = {
+  patient_id: string;
+  external_patient_id?: string | null;
+  display_name?: string | null;
+  sex?: string | null;
+  birth_date?: string | null;
+  consent_status?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type PatientCreatePayload = {
+  external_patient_id?: string | null;
+  display_name?: string | null;
+  name?: string | null;
+  sex?: string | null;
+  birth_date?: string | null;
+  consent_status?: string;
+};
+
+export type CaseItem = {
+  case_id: string;
+  case_no?: string | null;
+  patient_id: string;
+  disease_task?: string | null;
+  status?: string | null;
+  trace_id?: string | null;
+  chief_complaint?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CaseCreatePayload = {
+  patient_id: string;
+  case_no?: string | null;
+  disease_task?: string | null;
+  status?: string | null;
+  chief_complaint?: string | null;
+};
 
 export type CurrentUser = {
   user_id: string;
@@ -471,10 +512,47 @@ export async function getHealthReady() {
   return (await client.get('/health/ready')).data;
 }
 
-export async function listCases(traceId?: string) {
-  if (API_MODE === 'mock') return mock.cases;
+export async function listPatients(): Promise<PatientItem[]> {
+  if (API_MODE === 'mock') return [];
+  const data = (await client.get('/api/v1/patients')).data;
+  return unwrapList<PatientItem>(data);
+}
+
+export async function createPatient(payload: PatientCreatePayload): Promise<PatientItem> {
+  if (API_MODE === 'mock') {
+    return {
+      patient_id: 'patient-demo-created',
+      external_patient_id: payload.external_patient_id || null,
+      display_name: payload.display_name || payload.name || 'Demo Patient',
+      sex: payload.sex || null,
+      birth_date: payload.birth_date || null,
+      consent_status: payload.consent_status || 'unknown',
+    };
+  }
+  const data = (await client.post('/api/v1/patients', payload)).data;
+  return unwrapItem<PatientItem>(data);
+}
+
+export async function listCases(traceId?: string): Promise<CaseItem[]> {
+  if (API_MODE === 'mock') return mock.cases as CaseItem[];
   const data = (await client.get('/api/v1/cases', withTraceId(traceId))).data;
-  return unwrapList(data);
+  return unwrapList<CaseItem>(data);
+}
+
+export async function createCase(payload: CaseCreatePayload): Promise<CaseItem> {
+  if (API_MODE === 'mock') {
+    return {
+      case_id: 'case-demo-created',
+      patient_id: payload.patient_id,
+      case_no: payload.case_no || 'MO-CASE-DEMO',
+      disease_task: payload.disease_task || 'cap_cop',
+      status: payload.status || 'open',
+      trace_id: 'trace-demo-created',
+      chief_complaint: payload.chief_complaint || null,
+    };
+  }
+  const data = (await client.post('/api/v1/cases', payload)).data;
+  return unwrapItem<CaseItem>(data);
 }
 
 export async function listMissingValueQueries(caseId: string, traceId?: string): Promise<MissingValueListResponse> {

@@ -73,13 +73,13 @@ function translateError(error: unknown) {
     case 'case_not_found':
       return '病例不存在';
     case 'model_input_schema_not_found':
-      return '???? schema ???';
+      return '模型输入 schema 未找到';
     case 'unsupported_disease_task':
       return '当前病種任务暂不支持该模型输入预览';
     case 'insufficient_data_for_assessment':
       return '模型输入 schema 未找到';
     case 'missing_required_features':
-      return '?? required feature ????? silent fallback';
+      return '缺少必需特征，不能 silent fallback';
     case 'validation_error':
       return '请求参数校验未通过';
     case 'not_found':
@@ -323,11 +323,11 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
   if (pageError) {
     return (
       <Space direction='vertical' size={16} style={{ width: '100%' }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>?????????</Typography.Title>
+        <Typography.Title level={4} style={{ margin: 0 }}>模型输入预览</Typography.Title>
         <Alert type='error' showIcon message={pageError} description='请先返回病例列表，确认病例与模型注册数据可用。' />
         <Space wrap>
-          <Button type='primary' href='/cases'>??????</Button>
-          <Button href='/dashboard'>?????</Button>
+          <Button type='primary' href='/cases'>返回病例列表</Button>
+          <Button href='/dashboard'>返回工作台</Button>
         </Space>
       </Space>
     );
@@ -335,14 +335,14 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
 
   return (
     <Space direction='vertical' size={16} style={{ width: '100%' }}>
-      <Typography.Title level={4} style={{ margin: 0 }}>?????????</Typography.Title>
-      <Typography.Text type='secondary'>???{caseId}{caseRecord?.case_no ? ' ? ' + caseRecord.case_no : ''}</Typography.Text>
+      <Typography.Title level={4} style={{ margin: 0 }}>模型输入预览</Typography.Title>
+      <Typography.Text type='secondary'>病例：{caseId}{caseRecord?.case_no ? ' · ' + caseRecord.case_no : ''}</Typography.Text>
 
       <Alert
         type='info'
         showIcon
         message='当前仅做模型输入预览与规则校验'
-        description='?????????????????????????????????LLM ?????????? required feature ?? silent fallback?'
+        description='本页只展示病例数据映射到模型输入 schema 后的预览和校验结果。LLM 或前端参数不能绕过 required feature 校验，也不能 silent fallback。'
       />
 
       <Card title='病例上下文' extra={caseRecord?.trace_id ? <Link href={'/cases/' + caseId + '/lineage?trace_id=' + encodeURIComponent(caseRecord.trace_id)}>查看溯源</Link> : null}>
@@ -366,10 +366,10 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
             />
             <Descriptions bordered size='small' column={3}>
               <Descriptions.Item label='disease_task'>{selectionPreview?.disease_task || caseRecord?.disease_task || '-'}</Descriptions.Item>
-              <Descriptions.Item label='selection_required'>{selectionRequired ? '?' : '?'}</Descriptions.Item>
+              <Descriptions.Item label='selection_required'>{selectionRequired ? '是' : '否'}</Descriptions.Item>
               <Descriptions.Item label='selection_reason'>{selectionReason || '-'}</Descriptions.Item>
               <Descriptions.Item label='candidate_count'>{candidateCount}</Descriptions.Item>
-              <Descriptions.Item label='selected_candidate'>{selectedCandidate ? selectedCandidate.model_name + ' / ' + selectedCandidate.version_label : '?'}</Descriptions.Item>
+              <Descriptions.Item label='selected_candidate'>{selectedCandidate ? selectedCandidate.model_name + ' / ' + selectedCandidate.version_label : '-'}</Descriptions.Item>
               <Descriptions.Item label='selected_model_version_id'>{selectedCandidate?.model_version_id || selectedVersionId || '-'}</Descriptions.Item>
             </Descriptions>
             <Table
@@ -379,7 +379,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
               columns={[
                 { title: '模型名称', dataIndex: 'model_name' },
                 { title: '版本', dataIndex: 'version_label' },
-                { title: '?? ID', dataIndex: 'model_version_id' },
+                { title: '模型版本 ID', dataIndex: 'model_version_id' },
                 { title: '生命周期', dataIndex: 'lifecycle_status', render: (value: string) => value || '-' },
                 { title: '支持模态', dataIndex: 'supported_modalities', render: (value: string[]) => renderTags(value, 'blue') },
                 { title: 'feature_completeness', dataIndex: 'feature_completeness', render: (value: number | null | undefined) => (typeof value === 'number' ? value.toFixed(2) : '-') },
@@ -392,7 +392,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
         </Spin>
       </Card>
 
-      <Card title='???? schema' extra={<Space wrap><Select style={{ width: 420 }} value={selectedVersionId} options={versionOptions.map((item) => ({ value: item.version_id, label: item.model_name + ' ? ' + item.version_label + ' ? ' + item.version_id.slice(0, 8) }))} onChange={(value) => setSelectedVersionId(String(value))} />{selectedVersion ? <Tag color='blue'>{selectedVersion.model_name}</Tag> : null}<Tag color='geekblue'>{selectedVersionId}</Tag></Space>}>
+      <Card title='模型输入 schema' extra={<Space wrap><Select style={{ width: 420 }} value={selectedVersionId} options={versionOptions.map((item) => ({ value: item.version_id, label: item.model_name + ' · ' + item.version_label + ' · ' + item.version_id.slice(0, 8) }))} onChange={(value) => setSelectedVersionId(String(value))} />{selectedVersion ? <Tag color='blue'>{selectedVersion.model_name}</Tag> : null}<Tag color='geekblue'>{selectedVersionId}</Tag></Space>}>
         <Descriptions bordered size='small' column={3}>
           <Descriptions.Item label='disease_task_feature_set'>{schema?.disease_task_feature_set_name || schema?.disease_task_feature_set_key || '-'}</Descriptions.Item>
           <Descriptions.Item label='model_input_schema'>{schema?.model_input_schema_name || schema?.model_input_schema_key || '-'}</Descriptions.Item>
@@ -405,7 +405,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
           <Descriptions.Item label='lifecycle_status'>{schema?.lifecycle_status || '-'}</Descriptions.Item>
         </Descriptions>
         <div style={{ marginTop: 16 }}>
-          <Alert type='info' showIcon message='CAP/COP clinical MLP ????' description='cap_cop_clinical_feature_set_v1 ?? 36 ? CAP/COP ???????Striated_shadow.1 ? CAP/COP ???????????????????' />
+          <Alert type='info' showIcon message='CAP/COP clinical MLP 输入说明' description='cap_cop_clinical_feature_set_v1 包含 36 个 CAP/COP 任务特征；Striated_shadow.1 是历史训练 schema 的保留字段，只属于 CAP/COP 模型输入契约。' />
         </div>
         <div style={{ marginTop: 16 }}>
           <Table
@@ -467,10 +467,10 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
 
       <Card title='使用说明'>
         <Space direction='vertical' size={8}>
-          <Typography.Text>1. ????????????????????????</Typography.Text>
-          <Typography.Text>2. ?????????????????????????????????</Typography.Text>
-          <Typography.Text>3. ?? required feature ??? silent fallback????????{'?????????'}????????</Typography.Text>
-          <Typography.Text>4. LLM ??????????????</Typography.Text>
+          <Typography.Text>1. 本页只做模型输入预览和规则校验，不触发模型运行。</Typography.Text>
+          <Typography.Text>2. disease_task_feature_set 是病种任务特征集合，不是全局病例表结构。</Typography.Text>
+          <Typography.Text>3. 缺少 required feature 时不能 silent fallback，只能走缺失值咨询、明确默认策略或 insufficient_data_for_assessment。</Typography.Text>
+          <Typography.Text>4. LLM 和前端参数不能绕过后端模型输入校验。</Typography.Text>
         </Space>
       </Card>
     </Space>

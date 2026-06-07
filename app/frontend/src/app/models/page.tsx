@@ -83,6 +83,16 @@ function versionStateColor(state?: string) {
   return 'purple';
 }
 
+function renderCellText(value: unknown) {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
+}
+
+function renderJsonBlock(value: unknown) {
+  return <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(value || {}, null, 2)}</pre>;
+}
+
 export default function Page() {
   const [modelForm] = Form.useForm<ModelFormValues>();
   const [versionForm] = Form.useForm<VersionFormValues>();
@@ -336,14 +346,14 @@ export default function Page() {
           onRow={(record) => ({ onClick: () => void loadModel(record.model_id) })}
           rowClassName={(record) => (record.model_id === selectedModelId ? 'ant-table-row-selected' : '')}
           columns={[
-            { title: 'model_id', dataIndex: 'model_id', width: 220, render: (v: string) => v || '-' },
-            { title: 'model_name', dataIndex: 'model_name', width: 220, render: (v: string) => v || '-' },
-            { title: 'disease_agent', dataIndex: 'disease_agent', width: 180, render: (v: string) => v || '-' },
-            { title: 'task_type', dataIndex: 'task_type', width: 180, render: (v: string) => v || '-' },
-            { title: 'modality_scope', dataIndex: 'modality_scope', width: 220, render: (v: string[]) => Array.isArray(v) ? v.join(', ') : '-' },
-            { title: 'owner_team', dataIndex: 'owner_team', width: 180, render: (v: string) => v || '-' },
+            { title: 'model_id', dataIndex: 'model_id', width: 220, render: (v: unknown) => renderCellText(v) },
+            { title: 'model_name', dataIndex: 'model_name', width: 220, render: (v: unknown) => renderCellText(v) },
+            { title: 'disease_agent', dataIndex: 'disease_agent', width: 180, render: (v: unknown) => renderCellText(v) },
+            { title: 'task_type', dataIndex: 'task_type', width: 180, render: (v: unknown) => renderCellText(v) },
+            { title: 'modality_scope', dataIndex: 'modality_scope', width: 220, render: (v: unknown) => Array.isArray(v) ? v.join(', ') : renderCellText(v) },
+            { title: 'owner_team', dataIndex: 'owner_team', width: 180, render: (v: unknown) => renderCellText(v) },
             { title: 'is_active', dataIndex: 'is_active', width: 110, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? T('\u662f') : T('\u5426')}</Tag> },
-            { title: 'description', dataIndex: 'description', width: 320, render: (v: string) => v || '-' },
+            { title: 'description', dataIndex: 'description', width: 320, render: (v: unknown) => renderCellText(v) },
           ]}
         />
       </Card>
@@ -392,16 +402,16 @@ export default function Page() {
           pagination={false}
           scroll={{ x: 2200 }}
           columns={[
-            { title: 'model_version_id', dataIndex: 'version_id', width: 220, render: (v: string) => v || '-' },
-            { title: 'version_label', dataIndex: 'version_label', width: 150, render: (v: string) => v || '-' },
-            { title: 'approval_state', dataIndex: 'approval_state', width: 150, render: (v: string) => <Tag color={versionStateColor(v)}>{v || '-'}</Tag> },
-            { title: 'artifact_ref', dataIndex: 'artifact_ref', width: 280, render: (v: string) => v || '-' },
-            { title: 'metrics', dataIndex: 'metrics', width: 240, render: (v: Record<string, unknown>) => <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(v || {}, null, 2)}</pre> },
-            { title: 'runtime_constraints', dataIndex: 'runtime_constraints', width: 280, render: (v: Record<string, unknown>) => <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(v || {}, null, 2)}</pre> },
-            { title: 'approved_by', dataIndex: 'approved_by', width: 180, render: (v: string) => v || '-' },
-            { title: 'approved_at', dataIndex: 'approved_at', width: 220, render: (v: string) => v || '-' },
-            { title: 'promoted_by', dataIndex: 'promoted_by', width: 180, render: (v: string) => v || '-' },
-            { title: 'promoted_at', dataIndex: 'promoted_at', width: 220, render: (v: string) => v || '-' },
+            { title: 'model_version_id', dataIndex: 'version_id', width: 220, render: (v: unknown) => renderCellText(v) },
+            { title: 'version_label', dataIndex: 'version_label', width: 150, render: (v: unknown) => renderCellText(v) },
+            { title: 'approval_state', dataIndex: 'approval_state', width: 150, render: (v: string) => <Tag color={versionStateColor(v)}>{renderCellText(v)}</Tag> },
+            { title: 'artifact_ref', dataIndex: 'artifact_ref', width: 280, render: (v: unknown) => renderCellText(v) },
+            { title: 'metrics', dataIndex: 'metrics', width: 240, render: (v: unknown) => renderJsonBlock(v) },
+            { title: 'runtime_constraints', dataIndex: 'runtime_constraints', width: 280, render: (v: unknown) => renderJsonBlock(v) },
+            { title: 'approved_by', dataIndex: 'approved_by', width: 180, render: (v: unknown) => renderCellText(v) },
+            { title: 'approved_at', dataIndex: 'approved_at', width: 220, render: (v: unknown) => renderCellText(v) },
+            { title: 'promoted_by', dataIndex: 'promoted_by', width: 180, render: (v: unknown) => renderCellText(v) },
+            { title: 'promoted_at', dataIndex: 'promoted_at', width: 220, render: (v: unknown) => renderCellText(v) },
             {
               title: T('\u64cd\u4f5c'),
               dataIndex: 'version_id',
