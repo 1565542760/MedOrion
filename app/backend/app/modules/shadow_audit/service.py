@@ -110,7 +110,8 @@ def create_shadow_audit_record(db: Session, payload: ShadowAuditWriteRequestV1) 
     if not trace_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'invalid_trace_id', 'message': 'trace_id is required'})
 
-    shadow_run_id = f'shadow_{uuid5(NAMESPACE_URL, f"{trace_id}:{case_uuid}:{model_version_uuid}:{payload.adapter_code}").hex[:16]}'
+    idempotency_seed = payload.idempotency_key or f'{trace_id}:{case_uuid}:{model_version_uuid}:{payload.adapter_code}'
+    shadow_run_id = f'shadow_{uuid5(NAMESPACE_URL, idempotency_seed).hex[:16]}'
     existing_run = db.execute(select(ShadowInferenceRun).where(ShadowInferenceRun.shadow_run_id == shadow_run_id)).scalar_one_or_none()
     if existing_run is not None:
         existing_outputs = db.execute(

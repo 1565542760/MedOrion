@@ -94,6 +94,7 @@ class ShadowAuditWriteRequestV1(BaseModel):
     error_code: str | None = None
     error_detail_json: dict = Field(default_factory=dict)
     output: dict | None = None
+    idempotency_key: str | None = None
 
 
 class RuntimeSafetyConfigItemV1(BaseModel):
@@ -141,3 +142,28 @@ class ControlledShadowClinicalMlpResponseV1(BaseModel):
     runtime_safety_config: RuntimeSafetyConfigItemV1 = Field(default_factory=RuntimeSafetyConfigItemV1)
     item: ShadowInferenceRunDetailItemV1
     limitations: list[str] = Field(default_factory=list)
+
+class ControlledShadowClinicalMlpFold5OneShotRequestV1(BaseModel):
+    input_snapshot_id: str = Field(min_length=1)
+    trace_id: str | None = None
+    dry_run_label: str | None = None
+
+
+class ControlledShadowClinicalMlpFold5OneShotResponseV1(BaseModel):
+    status: str
+    route: str
+    execution_mode: str = 'one_shot_fold5'
+    shadow_run_id: str
+    case_id: UUID
+    patient_id: UUID
+    trace_id: str
+    model_version_id: UUID
+    input_snapshot_id: str
+    not_for_diagnosis: bool = True
+    runtime_stub: bool = True
+    candidate_label: str | None = None
+    prediction_probability_json: dict[str, Any] = Field(default_factory=dict)
+    confidence_json: dict[str, Any] = Field(default_factory=dict)
+    limitations_json: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = None
+
