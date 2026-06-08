@@ -7,6 +7,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.cases.router import router as cases_router
 from app.modules.clinical.router import router as clinical_router
 from app.modules.feedback.router import router as feedback_router
+from app.modules.imaging_inputs.router import router as imaging_inputs_router
 from app.modules.inference.router import router as inference_router
 from app.modules.model_registry.router import router as model_registry_router, version_router as model_version_router
 from app.modules.model_input.router import router as model_input_router
@@ -24,6 +25,7 @@ api_router.include_router(auth_router)
 api_router.include_router(patients_router, prefix='/patients', tags=['patients'])
 api_router.include_router(cases_router, prefix='/cases', tags=['cases'])
 api_router.include_router(assets_router, tags=['case-inputs'])
+api_router.include_router(imaging_inputs_router, tags=['imaging-inputs'])
 api_router.include_router(clinical_router, tags=['case-missing-values'])
 api_router.include_router(inference_router, tags=['inference'])
 api_router.include_router(recommendations_router, tags=['recommendations'])

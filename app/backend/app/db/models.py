@@ -178,6 +178,37 @@ class EmrDocument(Base, TimestampMixin):
 
 
 
+
+
+
+class CaseImagingInput(Base, TimestampMixin):
+    __tablename__ = 'case_imaging_inputs'
+    __table_args__ = (
+        UniqueConstraint('input_asset_id', name='uq_case_imaging_inputs_input_asset_id'),
+        Index('ix_case_imaging_inputs_case_id', 'case_id'),
+        Index('ix_case_imaging_inputs_patient_id', 'patient_id'),
+        Index('ix_case_imaging_inputs_trace_id', 'trace_id'),
+        Index('ix_case_imaging_inputs_modality', 'modality'),
+        Index('ix_case_imaging_inputs_source_type', 'source_type'),
+        Index('ix_case_imaging_inputs_created_at', 'created_at'),
+        Index('ix_case_imaging_inputs_case_created_at', 'case_id', 'created_at'),
+        Index('ix_case_imaging_inputs_trace_modality', 'trace_id', 'modality'),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    input_asset_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('cases.id'), nullable=False)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('patients.id'), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    modality: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    storage_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
+    deidentified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text('true'))
+    not_for_diagnosis: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text('true'))
+    provenance_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    quality_flags_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+
+
 class AccessAuditEvent(Base):
     __tablename__ = 'access_audit_events'
     __table_args__ = (
