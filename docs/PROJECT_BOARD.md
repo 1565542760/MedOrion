@@ -109,6 +109,22 @@ Avoid for now:
 - Public deployment.
 - Broad model directory scanning.
 
+
+## Course Project Track - Machine Vision and Digital Twin
+
+A course-facing track has been added under `docs/coursework/` for `???????????`.
+
+| Item | Current Status | Notes |
+| --- | --- | --- |
+| Assignment extraction | Added | Course requirements summarized in `docs/coursework/MACHINE_VISION_DIGITAL_TWIN_ASSIGNMENT_BRIEF.md` |
+| MedOrion coursework framework | Added | Existing MedOrion capabilities mapped to course requirements |
+| Scientific protocol | Added | Defines machine vision, digital twin, evaluation, and non-claim boundaries |
+| Explicit machine vision module | Pending | Highest-priority gap for course completion |
+| Digital twin visualization | Pending | Should map case/imaging/model state into an interactive visual state |
+| Report/PPT/video scaffold | Pending | Required by course submission |
+
+For course completion, prioritize imaging/vision and digital-twin visualization work over diagnosis promotion or model default/canary promotion.
+
 ## Conversation Routing
 
 | Work Type | Preferred Thread |

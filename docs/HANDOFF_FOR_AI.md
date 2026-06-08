@@ -162,6 +162,13 @@ Allowed missing-required-field outcomes:
 - Shadow and orchestration audit visibility exists, but the product UX is still skeletal.
 - Real deployment hardening is not done: no HTTPS, no externalized DB plan applied, no backup/restore rehearsal.
 
+
+## Course Assignment Integration
+
+A course-project line for `???????????` is now tracked under `docs/coursework/`. It should reuse the existing MedOrion architecture rather than creating a separate project. The defensible framing is a CAP/COP machine-vision and clinical-state digital twin research prototype.
+
+Before claiming the coursework is complete, verify that it includes a real or explicitly simulated machine vision component, a digital twin state/visualization layer, experimental metrics, report/PPT/video deliverables, and the Stage 127 feature-contract limitation. Do not describe clinical MLP shadow output as a diagnosis.
+
 ## Recommended Next Steps
 
 Reasonable next stages:

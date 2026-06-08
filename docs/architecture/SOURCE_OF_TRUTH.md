@@ -165,6 +165,13 @@ Allowed missing-data outcomes:
 - apply explicit default strategy if allowed by schema
 - return `insufficient_data_for_assessment`
 
+
+## Course Project Boundary
+
+The `???????????` coursework line is a documentation and delivery track inside MedOrion. It should use MedOrion's existing local-first workbench, provenance, shadow audit, model registry, and CAP/COP workflow as the project substrate.
+
+However, the coursework cannot be considered complete from the current clinical MLP shadow baseline alone. The course explicitly requires a machine vision perception component and a digital twin visualization/validation loop. Any missing image/video evidence, unverified feature contract, or simulated visual component must be disclosed in the report.
+
 ## Production Boundary
 
 Before any production-like deployment, MedOrion still needs:

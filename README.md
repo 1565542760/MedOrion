@@ -214,6 +214,13 @@ Do not do any of the following without explicit approval:
 - Promote a model to default based on dry-run or low-evidence retrospective checks alone.
 - Mix orchestration audit noise into case evidence chains.
 
+
+## Course Project Integration
+
+MedOrion is also being organized as a course-project substrate for `???????????`. The course-facing work is documented under `docs/coursework/` and maps the existing CAP/COP doctor workbench, shadow audit, model registry, provenance, and future imaging/digital-twin visualization work to the assessment requirements.
+
+Coursework integration must remain scientifically conservative: the CAP/COP clinical MLP path is a shadow baseline only, and the course still needs an explicit machine vision component and a digital twin visualization layer before it can be presented as a complete machine-vision-driven digital twin project.
+
 ## Important Docs
 
 - `docs/HANDOFF_FOR_AI.md`
