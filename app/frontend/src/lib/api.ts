@@ -76,6 +76,43 @@ export type CaseCreatePayload = {
   chief_complaint?: string | null;
 };
 
+export type CaseImagingInputCreatePayload = {
+  patient_id?: string | null;
+  trace_id?: string | null;
+  modality: string;
+  source_type: string;
+  storage_uri: string;
+  deidentified?: boolean;
+  not_for_diagnosis?: boolean;
+  provenance_json?: Record<string, unknown> | null;
+  quality_flags_json?: Record<string, unknown> | null;
+};
+
+export type CaseImagingInputItem = {
+  input_asset_id: string;
+  case_id: string;
+  patient_id?: string | null;
+  trace_id?: string | null;
+  modality: string;
+  source_type: string;
+  storage_uri: string;
+  deidentified: boolean;
+  not_for_diagnosis: boolean;
+  provenance_json?: Record<string, unknown> | null;
+  quality_flags_json?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CaseImagingInputListResponse = {
+  status?: string;
+  route?: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: CaseImagingInputItem[];
+};
+
 export type CurrentUser = {
   user_id: string;
   username: string;
@@ -136,6 +173,23 @@ const mock = {
   cases: [
     { case_id: 'case-001', patient_id: 'patient-001', disease_task: 'CAP', status: 'in_review', trace_id: 'trace-demo' },
     { case_id: 'case-002', patient_id: 'patient-002', disease_task: 'COP', status: 'awaiting_input', trace_id: 'trace-demo-2' },
+  ],
+  imagingInputs: [
+    {
+      input_asset_id: 'img-demo-001',
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      trace_id: 'trace-demo',
+      modality: 'CT',
+      source_type: 'demo',
+      storage_uri: 'managed://coursework-demo/case-001/ct-series-01',
+      deidentified: true,
+      not_for_diagnosis: true,
+      provenance_json: { origin: 'coursework-demo', capture_mode: 'manual-registration', source_case_link: 'case-001' },
+      quality_flags_json: { artifact_free: true, slice_count_ok: true, orientation_ok: true },
+      created_at: '2026-06-08T00:00:00Z',
+      updated_at: '2026-06-08T00:00:00Z',
+    },
   ],
   missingQueries: [
     {
@@ -553,6 +607,70 @@ export async function createCase(payload: CaseCreatePayload): Promise<CaseItem> 
   }
   const data = (await client.post('/api/v1/cases', payload)).data;
   return unwrapItem<CaseItem>(data);
+}
+
+export async function createCaseImagingInput(caseId: string, payload: CaseImagingInputCreatePayload): Promise<CaseImagingInputItem> {
+  if (API_MODE === 'mock') {
+    const item: CaseImagingInputItem = {
+      input_asset_id: 'img-demo-created',
+      case_id: caseId,
+      patient_id: payload.patient_id || 'patient-001',
+      trace_id: payload.trace_id || 'trace-demo',
+      modality: payload.modality,
+      source_type: payload.source_type,
+      storage_uri: payload.storage_uri,
+      deidentified: payload.deidentified ?? true,
+      not_for_diagnosis: payload.not_for_diagnosis ?? true,
+      provenance_json: payload.provenance_json || {},
+      quality_flags_json: payload.quality_flags_json || {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    (mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs = [item, ...((mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs || [])];
+    return item;
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/imaging-inputs', payload, withTraceId(payload.trace_id || undefined))).data;
+  return unwrapItem<CaseImagingInputItem>(data);
+}
+
+export async function listCaseImagingInputs(caseId: string, limit: number = 20, offset: number = 0): Promise<CaseImagingInputListResponse> {
+  if (API_MODE === 'mock') {
+    const items = ((mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs || []).filter((item) => item.case_id === caseId);
+    return { status: 'ok', route: '/api/v1/cases/' + caseId + '/imaging-inputs', total: items.length, limit, offset, items: items.slice(offset, offset + limit) };
+  }
+  const data = (await client.get('/api/v1/cases/' + caseId + '/imaging-inputs', { params: { limit, offset } })).data;
+  const items = unwrapList<CaseImagingInputItem>(data);
+  const total = typeof data?.total === 'number' ? data.total : items.length;
+  return {
+    status: data?.status,
+    route: data?.route,
+    total,
+    limit,
+    offset,
+    items,
+  };
+}
+
+export async function getCaseImagingInput(inputAssetId: string): Promise<CaseImagingInputItem> {
+  if (API_MODE === 'mock') {
+    return ((mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs || []).find((item) => item.input_asset_id === inputAssetId) || {
+      input_asset_id: inputAssetId,
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      trace_id: 'trace-demo',
+      modality: 'CT',
+      source_type: 'demo',
+      storage_uri: 'managed://coursework-demo/case-001/ct-series-01',
+      deidentified: true,
+      not_for_diagnosis: true,
+      provenance_json: { origin: 'coursework-demo' },
+      quality_flags_json: { artifact_free: true },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+  const data = (await client.get('/api/v1/imaging-inputs/' + inputAssetId)).data;
+  return unwrapItem<CaseImagingInputItem>(data);
 }
 
 export async function listMissingValueQueries(caseId: string, traceId?: string): Promise<MissingValueListResponse> {
@@ -1017,6 +1135,90 @@ export type ModelSelectionPayload = {
   candidate_model_version_ids: string[];
 };
 
+export type ModelInputSnapshotCreatePayload = {
+  trace_id: string;
+  model_version_id: string;
+  model_input_schema_id: string;
+  disease_task_feature_set_id: string;
+  preprocess_artifact_ref?: string | null;
+  mapped_features: Record<string, unknown>;
+  missing_features: unknown[];
+  defaulted_features: unknown[];
+  doctor_provided_features: unknown[];
+  source_refs: unknown[];
+  validation_status: 'ready_for_inference' | 'insufficient_data_for_assessment' | 'missing_required_features' | 'default_applied' | 'doctor_confirmation_required' | 'validation_failed';
+  current_assessment_status: 'ready_for_inference' | 'insufficient_data_for_assessment' | 'missing_required_features' | 'default_applied' | 'doctor_confirmation_required' | 'validation_failed';
+  insufficient_data_for_assessment: boolean;
+  runtime_stub: true;
+  not_for_diagnosis: true;
+};
+
+export type ModelInputSnapshotSummaryItem = {
+  id: string;
+  input_snapshot_id: string;
+  case_id: string;
+  patient_id: string;
+  trace_id: string;
+  model_version_id: string;
+  model_input_schema_id: string;
+  disease_task_feature_set_id: string;
+  validation_status: string;
+  current_assessment_status: string;
+  insufficient_data_for_assessment?: boolean | null;
+  runtime_stub?: boolean | null;
+  not_for_diagnosis?: boolean | null;
+  mapped_feature_count?: number;
+  missing_feature_count?: number;
+  defaulted_feature_count?: number;
+  doctor_provided_feature_count?: number;
+  source_ref_count?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type ModelInputSnapshotItem = ModelInputSnapshotSummaryItem & {
+  preprocess_artifact_ref?: string | null;
+  mapped_features?: Record<string, unknown> | null;
+  missing_features?: unknown[];
+  defaulted_features?: unknown[];
+  doctor_provided_features?: unknown[];
+  source_refs?: unknown[];
+};
+
+export type ModelInputSnapshotListResponse = {
+  status?: string;
+  route?: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: ModelInputSnapshotSummaryItem[];
+};
+
+export type ControlledShadowClinicalMlpFold5OneShotRequest = {
+  input_snapshot_id: string;
+  trace_id?: string | null;
+  dry_run_label?: string | null;
+};
+
+export type ControlledShadowClinicalMlpFold5OneShotResponse = {
+  status: string;
+  route: string;
+  execution_mode?: string;
+  shadow_run_id: string;
+  case_id: string;
+  patient_id: string;
+  trace_id: string;
+  model_version_id: string;
+  input_snapshot_id: string;
+  not_for_diagnosis?: boolean;
+  runtime_stub?: boolean;
+  candidate_label?: string | null;
+  prediction_probability_json?: Record<string, unknown>;
+  confidence_json?: Record<string, unknown>;
+  limitations_json?: Record<string, unknown>;
+  error_code?: string | null;
+};
+
 export async function getModelInputSchema(modelVersionId: string): Promise<ModelInputSchemaResponse> {
   if (API_MODE === 'mock') {
     return {
@@ -1128,6 +1330,151 @@ export async function previewModelSelection(caseId: string, payload: ModelSelect
   }
   const data = (await client.post('/api/v1/cases/' + caseId + '/model-selection-preview', payload)).data;
   return data as ModelSelectionPreviewResponse;
+}
+
+export async function createModelInputSnapshot(caseId: string, payload: ModelInputSnapshotCreatePayload): Promise<ModelInputSnapshotItem> {
+  if (API_MODE === 'mock') {
+    return {
+      id: 'demo-snapshot-id',
+      input_snapshot_id: 'snap_demo_' + caseId,
+      case_id: caseId,
+      patient_id: 'patient-demo',
+      trace_id: payload.trace_id,
+      model_version_id: payload.model_version_id,
+      model_input_schema_id: payload.model_input_schema_id,
+      disease_task_feature_set_id: payload.disease_task_feature_set_id,
+      validation_status: payload.validation_status,
+      current_assessment_status: payload.current_assessment_status,
+      insufficient_data_for_assessment: payload.insufficient_data_for_assessment,
+      runtime_stub: true,
+      not_for_diagnosis: true,
+      preprocess_artifact_ref: payload.preprocess_artifact_ref || null,
+      mapped_features: payload.mapped_features,
+      missing_features: payload.missing_features,
+      defaulted_features: payload.defaulted_features,
+      doctor_provided_features: payload.doctor_provided_features,
+      source_refs: payload.source_refs,
+      mapped_feature_count: Object.keys(payload.mapped_features || {}).length,
+      missing_feature_count: payload.missing_features.length,
+      defaulted_feature_count: payload.defaulted_features.length,
+      doctor_provided_feature_count: payload.doctor_provided_features.length,
+      source_ref_count: payload.source_refs.length,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/model-input-snapshots', payload)).data;
+  return unwrapItem<ModelInputSnapshotItem>(data);
+}
+
+export async function listModelInputSnapshotsByCase(caseId: string, modelVersionId?: string, limit: number = 20, offset: number = 0): Promise<ModelInputSnapshotListResponse> {
+  if (API_MODE === 'mock') {
+    return {
+      status: 'ok',
+      route: '/api/v1/cases/' + caseId + '/model-input-snapshots',
+      total: 1,
+      limit,
+      offset,
+      items: [
+        {
+          id: 'demo-snapshot-id',
+          input_snapshot_id: 'snap_demo_' + caseId,
+          case_id: caseId,
+          patient_id: 'patient-demo',
+          trace_id: 'trace-demo',
+          model_version_id: modelVersionId || 'capcop_stub_v1',
+          model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+          disease_task_feature_set_id: 'cap_cop_clinical_feature_set_v1',
+          validation_status: 'ready_for_inference',
+          current_assessment_status: 'ready_for_inference',
+          insufficient_data_for_assessment: false,
+          runtime_stub: true,
+          not_for_diagnosis: true,
+          mapped_feature_count: 36,
+          missing_feature_count: 0,
+          defaulted_feature_count: 0,
+          doctor_provided_feature_count: 36,
+          source_ref_count: 1,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    };
+  }
+  const data = (await client.get('/api/v1/cases/' + caseId + '/model-input-snapshots', {
+    params: {
+      limit,
+      offset,
+      model_version_id: modelVersionId || undefined,
+    },
+  })).data;
+  return data as ModelInputSnapshotListResponse;
+}
+
+export async function getModelInputSnapshot(inputSnapshotId: string): Promise<ModelInputSnapshotItem> {
+  if (API_MODE === 'mock') {
+    return {
+      id: 'demo-snapshot-id',
+      input_snapshot_id: inputSnapshotId,
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      trace_id: 'trace-demo',
+      model_version_id: 'capcop_stub_v1',
+      model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+      disease_task_feature_set_id: 'cap_cop_clinical_feature_set_v1',
+      validation_status: 'ready_for_inference',
+      current_assessment_status: 'ready_for_inference',
+      insufficient_data_for_assessment: false,
+      runtime_stub: true,
+      not_for_diagnosis: true,
+      preprocess_artifact_ref: 'clinical_tabular_standardization_v1.json',
+      mapped_features: {},
+      missing_features: [],
+      defaulted_features: [],
+      doctor_provided_features: [],
+      source_refs: [],
+      mapped_feature_count: 0,
+      missing_feature_count: 0,
+      defaulted_feature_count: 0,
+      doctor_provided_feature_count: 0,
+      source_ref_count: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+  const data = (await client.get('/api/v1/model-input-snapshots/' + inputSnapshotId)).data;
+  return unwrapItem<ModelInputSnapshotItem>(data);
+}
+
+export async function runClinicalMlpFold5OneShotShadow(caseId: string, payload: ControlledShadowClinicalMlpFold5OneShotRequest): Promise<ControlledShadowClinicalMlpFold5OneShotResponse> {
+  if (API_MODE === 'mock') {
+    return {
+      status: 'completed',
+      route: '/api/v1/cases/' + caseId + '/shadow-inference/clinical-mlp/fold5/one-shot',
+      execution_mode: 'one_shot_fold5',
+      shadow_run_id: 'shadow_mock_' + payload.input_snapshot_id.slice(-8),
+      case_id: caseId,
+      patient_id: 'patient-demo',
+      trace_id: payload.trace_id || 'trace-demo',
+      model_version_id: 'capcop_stub_v1',
+      input_snapshot_id: payload.input_snapshot_id,
+      not_for_diagnosis: true,
+      runtime_stub: true,
+      candidate_label: 'COP',
+      prediction_probability_json: { CAP: 0, COP: 1 },
+      confidence_json: { calibrated: false, value: 1 },
+      limitations_json: {
+        shadow_only: true,
+        not_for_diagnosis: true,
+        not_formal_recommendation: true,
+        probability_uncalibrated: true,
+        requires_doctor_review: true,
+      },
+      error_code: null,
+    };
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/shadow-inference/clinical-mlp/fold5/one-shot', payload)).data;
+  return data as ControlledShadowClinicalMlpFold5OneShotResponse;
 }
 
 
@@ -1315,10 +1662,6 @@ export async function getShadowRunOutputs(shadowRunId: string): Promise<ShadowIn
   const total = typeof data?.total === 'number' ? data.total : items.length;
   return { items, total };
 }
-
-
-
-
 
 
 
