@@ -13,6 +13,8 @@ from app.db.session import SessionLocal
 from app.modules.shadow_audit.schemas import (
     ControlledShadowClinicalMlpFold5OneShotRequestV1,
     ControlledShadowClinicalMlpFold5OneShotResponseV1,
+    ControlledShadowImagingResNet18OneShotRequestV1,
+    ControlledShadowImagingResNet18OneShotResponseV1,
     ControlledShadowClinicalMlpRequestV1,
     ControlledShadowClinicalMlpResponseV1,
     RuntimeSafetyConfigItemV1,
@@ -26,6 +28,7 @@ from app.modules.shadow_audit.schemas import (
     ShadowInferenceRunListResponseV1,
 )
 from app.modules.shadow_audit.clinical_mlp import run_cap_cop_clinical_mlp_fold5_one_shot_shadow
+from app.modules.shadow_audit.imaging_resnet18 import run_controlled_imaging_resnet18_one_shot_shadow
 from app.modules.shadow_audit.service import create_shadow_audit_record, run_controlled_cap_cop_clinical_mlp_shadow
 
 router = APIRouter()
@@ -129,6 +132,34 @@ def run_fold5_one_shot_shadow_clinical_mlp(
         confidence_json=output.confidence_json if output is not None else {},
         limitations_json=limitations_json,
         error_code=result.run.error_code,
+    )
+
+
+
+
+@router.post('/cases/{case_id}/shadow-inference/imaging-resnet18/one-shot', response_model=ControlledShadowImagingResNet18OneShotResponseV1)
+def run_controlled_shadow_imaging_resnet18_one_shot(
+    case_id: str,
+    payload: ControlledShadowImagingResNet18OneShotRequestV1,
+    db: Session = Depends(get_db),
+    actor: User = Depends(one_shot_guard),
+) -> ControlledShadowImagingResNet18OneShotResponseV1:
+    result = run_controlled_imaging_resnet18_one_shot_shadow(db, case_id, actor, payload)
+    return ControlledShadowImagingResNet18OneShotResponseV1(
+        status=result.status,
+        route=f'/api/v1/cases/{case_id}/shadow-inference/imaging-resnet18/one-shot',
+        execution_mode=result.execution_mode,
+        case_id=result.case_id,
+        patient_id=result.patient_id,
+        trace_id=result.trace_id,
+        input_asset_id=result.input_asset_id,
+        resource_type=result.resource_type,
+        model_family=result.model_family,
+        not_for_diagnosis=result.not_for_diagnosis,
+        runtime_stub=result.runtime_stub,
+        error_code=result.error_code,
+        error_message=result.error_message,
+        limitations=list(result.limitations or []),
     )
 
 @router.get('/shadow-inference-runs/{shadow_run_id}', response_model=ShadowInferenceRunDetailResponseV1)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -167,3 +167,28 @@ class ControlledShadowClinicalMlpFold5OneShotResponseV1(BaseModel):
     limitations_json: dict[str, Any] = Field(default_factory=dict)
     error_code: str | None = None
 
+
+class ControlledShadowImagingResNet18OneShotRequestV1(BaseModel):
+    input_asset_id: str = Field(min_length=1)
+    trace_id: str | None = None
+    dry_run_label: str | None = None
+    not_for_diagnosis: Literal[True] = True
+    runtime_stub: Literal[True] = True
+    execution_mode: Literal['metadata_only_stub'] = 'metadata_only_stub'
+
+
+class ControlledShadowImagingResNet18OneShotResponseV1(BaseModel):
+    status: str
+    route: str
+    execution_mode: str = 'metadata_only_stub'
+    case_id: UUID
+    patient_id: UUID
+    trace_id: str
+    input_asset_id: str
+    resource_type: str = 'case_imaging_input'
+    model_family: str = 'imaging_resnet18'
+    not_for_diagnosis: bool = True
+    runtime_stub: bool = True
+    error_code: str | None = None
+    error_message: str | None = None
+    limitations: list[str] = Field(default_factory=list)
