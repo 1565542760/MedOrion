@@ -189,6 +189,10 @@ class ControlledShadowImagingResNet18OneShotResponseV1(BaseModel):
     model_family: str = 'imaging_resnet18'
     not_for_diagnosis: bool = True
     runtime_stub: bool = True
+    shadow_run_id: str | None = None
+    artifact_hash: str | None = None
+    runner_state: str | None = None
+    prototype_state: str | None = None
     error_code: str | None = None
     error_message: str | None = None
     limitations: list[str] = Field(default_factory=list)

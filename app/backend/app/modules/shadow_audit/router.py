@@ -145,6 +145,7 @@ def run_controlled_shadow_imaging_resnet18_one_shot(
     actor: User = Depends(one_shot_guard),
 ) -> ControlledShadowImagingResNet18OneShotResponseV1:
     result = run_controlled_imaging_resnet18_one_shot_shadow(db, case_id, actor, payload)
+    db.commit()
     return ControlledShadowImagingResNet18OneShotResponseV1(
         status=result.status,
         route=f'/api/v1/cases/{case_id}/shadow-inference/imaging-resnet18/one-shot',
@@ -157,6 +158,10 @@ def run_controlled_shadow_imaging_resnet18_one_shot(
         model_family=result.model_family,
         not_for_diagnosis=result.not_for_diagnosis,
         runtime_stub=result.runtime_stub,
+        shadow_run_id=result.shadow_run_id,
+        artifact_hash=result.artifact_hash,
+        runner_state=result.runner_state,
+        prototype_state=result.prototype_state,
         error_code=result.error_code,
         error_message=result.error_message,
         limitations=list(result.limitations or []),
