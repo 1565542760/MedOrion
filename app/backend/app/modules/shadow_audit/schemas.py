@@ -202,3 +202,42 @@ class ControlledShadowImagingResNet18OneShotResponseV1(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     limitations: list[str] = Field(default_factory=list)
+
+
+class ControlledShadowMultimodalResNet18OneShotRequestV1(BaseModel):
+    input_asset_id: str = Field(min_length=1)
+    input_snapshot_id: str = Field(min_length=1)
+    trace_id: str | None = None
+    dry_run_label: str | None = None
+    enable_real_shadow: bool = False
+    not_for_diagnosis: Literal[True] = True
+    runtime_stub: Literal[True] = True
+    execution_mode: Literal['metadata_only_stub'] = 'metadata_only_stub'
+
+
+class ControlledShadowMultimodalResNet18OneShotResponseV1(BaseModel):
+    status: str
+    route: str
+    execution_mode: str = 'metadata_only_stub'
+    shadow_disabled: bool = False
+    case_id: UUID
+    patient_id: UUID
+    trace_id: str
+    input_asset_id: str
+    input_snapshot_id: str
+    resource_type: str = 'case_multimodal_input'
+    model_family: str = 'multimodal_resnet18'
+    not_for_diagnosis: bool = True
+    runtime_stub: bool = True
+    shadow_run_id: str | None = None
+    artifact_hash: str | None = None
+    runner_state: str | None = None
+    prototype_state: str | None = None
+    candidate_label: str | None = None
+    prediction_probability_json: dict[str, Any] = Field(default_factory=dict)
+    confidence_json: dict[str, Any] = Field(default_factory=dict)
+    uncertainty_json: dict[str, Any] = Field(default_factory=dict)
+    limitations_json: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = None
+    error_message: str | None = None
+    limitations: list[str] = Field(default_factory=list)

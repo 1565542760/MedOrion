@@ -15,6 +15,8 @@ from app.modules.shadow_audit.schemas import (
     ControlledShadowClinicalMlpFold5OneShotResponseV1,
     ControlledShadowImagingResNet18OneShotRequestV1,
     ControlledShadowImagingResNet18OneShotResponseV1,
+    ControlledShadowMultimodalResNet18OneShotRequestV1,
+    ControlledShadowMultimodalResNet18OneShotResponseV1,
     ControlledShadowClinicalMlpRequestV1,
     ControlledShadowClinicalMlpResponseV1,
     RuntimeSafetyConfigItemV1,
@@ -28,6 +30,7 @@ from app.modules.shadow_audit.schemas import (
     ShadowInferenceRunListResponseV1,
 )
 from app.modules.shadow_audit.clinical_mlp import run_cap_cop_clinical_mlp_fold5_one_shot_shadow
+from app.modules.shadow_audit.multimodal_resnet18 import run_controlled_multimodal_resnet18_one_shot_shadow
 from app.modules.shadow_audit.imaging_resnet18 import run_controlled_imaging_resnet18_one_shot_shadow
 from app.modules.shadow_audit.service import create_shadow_audit_record, run_controlled_cap_cop_clinical_mlp_shadow
 
@@ -156,6 +159,46 @@ def run_controlled_shadow_imaging_resnet18_one_shot(
         patient_id=result.patient_id,
         trace_id=result.trace_id,
         input_asset_id=result.input_asset_id,
+        resource_type=result.resource_type,
+        model_family=result.model_family,
+        not_for_diagnosis=result.not_for_diagnosis,
+        runtime_stub=result.runtime_stub,
+        shadow_run_id=result.shadow_run_id,
+        artifact_hash=result.artifact_hash,
+        runner_state=result.runner_state,
+        prototype_state=result.prototype_state,
+        candidate_label=output.candidate_label if output is not None else None,
+        prediction_probability_json=output.prediction_probability_json if output is not None else {},
+        confidence_json=output.confidence_json if output is not None else {},
+        uncertainty_json=output.uncertainty_json if output is not None else {},
+        limitations_json=limitations_json,
+        error_code=result.error_code,
+        error_message=result.error_message,
+        limitations=list(result.limitations or []),
+    )
+
+
+@router.post('/cases/{case_id}/shadow-inference/multimodal-resnet18/one-shot', response_model=ControlledShadowMultimodalResNet18OneShotResponseV1)
+def run_controlled_shadow_multimodal_resnet18_one_shot(
+    case_id: str,
+    payload: ControlledShadowMultimodalResNet18OneShotRequestV1,
+    db: Session = Depends(get_db),
+    actor: User = Depends(one_shot_guard),
+) -> ControlledShadowMultimodalResNet18OneShotResponseV1:
+    result = run_controlled_multimodal_resnet18_one_shot_shadow(db, case_id, actor, payload)
+    db.commit()
+    output = result.outputs[0] if result.outputs else None
+    limitations_json: dict = output.limitations_json if output is not None else {'items': [result.run.error_code or result.run.status]}
+    return ControlledShadowMultimodalResNet18OneShotResponseV1(
+        status=result.status,
+        route=f'/api/v1/cases/{case_id}/shadow-inference/multimodal-resnet18/one-shot',
+        execution_mode=result.execution_mode,
+        shadow_disabled=result.status == 'shadow_disabled',
+        case_id=result.case_id,
+        patient_id=result.patient_id,
+        trace_id=result.trace_id,
+        input_asset_id=result.input_asset_id,
+        input_snapshot_id=result.input_snapshot_id,
         resource_type=result.resource_type,
         model_family=result.model_family,
         not_for_diagnosis=result.not_for_diagnosis,
