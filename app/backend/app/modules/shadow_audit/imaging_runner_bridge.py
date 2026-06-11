@@ -13,7 +13,7 @@ LOGGER = logging.getLogger("app.shadow_audit.imaging_runner_bridge")
 
 IMAGING_RUNNER_PYTHON_PATH = Path(settings.cap_cop_clinical_mlp_runner_python_path)
 IMAGING_RUNNER_SCRIPT_PATH = Path("/srv/medorion/app/model-runners/cap_cop_imaging_resnet18_runner.py")
-IMAGING_RUNNER_TIMEOUT_SECONDS = int(settings.cap_cop_clinical_mlp_shadow_timeout_seconds)
+IMAGING_RUNNER_TIMEOUT_SECONDS = max(int(settings.cap_cop_clinical_mlp_shadow_timeout_seconds), 300)
 
 
 @dataclass(frozen=True)

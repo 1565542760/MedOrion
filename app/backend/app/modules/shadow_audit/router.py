@@ -146,6 +146,8 @@ def run_controlled_shadow_imaging_resnet18_one_shot(
 ) -> ControlledShadowImagingResNet18OneShotResponseV1:
     result = run_controlled_imaging_resnet18_one_shot_shadow(db, case_id, actor, payload)
     db.commit()
+    output = result.outputs[0] if result.outputs else None
+    limitations_json: dict = output.limitations_json if output is not None else {'items': [result.run.error_code or result.run.status]}
     return ControlledShadowImagingResNet18OneShotResponseV1(
         status=result.status,
         route=f'/api/v1/cases/{case_id}/shadow-inference/imaging-resnet18/one-shot',
@@ -162,6 +164,11 @@ def run_controlled_shadow_imaging_resnet18_one_shot(
         artifact_hash=result.artifact_hash,
         runner_state=result.runner_state,
         prototype_state=result.prototype_state,
+        candidate_label=output.candidate_label if output is not None else None,
+        prediction_probability_json=output.prediction_probability_json if output is not None else {},
+        confidence_json=output.confidence_json if output is not None else {},
+        uncertainty_json=output.uncertainty_json if output is not None else {},
+        limitations_json=limitations_json,
         error_code=result.error_code,
         error_message=result.error_message,
         limitations=list(result.limitations or []),
