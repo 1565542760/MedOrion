@@ -1507,6 +1507,7 @@ export type ShadowInferenceRunItem = {
   model_input_schema_id?: string | null;
   input_snapshot_id?: string | null;
   status?: string | null;
+  prototype_state?: string | null;
   runtime_env_json?: Record<string, unknown> | null;
   runtime_stub?: boolean | null;
   not_for_diagnosis?: boolean | null;
@@ -1550,6 +1551,7 @@ export async function getShadowInferenceRun(shadowRunId: string): Promise<Shadow
       model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
       input_snapshot_id: 'snapshot-demo',
       status: 'shadow_success',
+      prototype_state: 'prototype_not_executed',
       runtime_env_json: { env: 'dev', shadow: true },
       runtime_stub: true,
       not_for_diagnosis: true,
@@ -1581,6 +1583,7 @@ export async function listShadowRunsByCase(caseId: string): Promise<ShadowInfere
       model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
       input_snapshot_id: 'snapshot-demo',
       status: 'shadow_success',
+      prototype_state: 'prototype_not_executed',
       runtime_env_json: { env: 'dev', shadow: true },
       runtime_stub: true,
       not_for_diagnosis: true,
@@ -1614,6 +1617,7 @@ export async function listShadowRunsByTrace(traceId: string): Promise<ShadowInfe
       model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
       input_snapshot_id: 'snapshot-demo',
       status: 'shadow_success',
+      prototype_state: 'prototype_not_executed',
       runtime_env_json: { env: 'dev', shadow: true },
       runtime_stub: true,
       not_for_diagnosis: true,
@@ -1662,7 +1666,6 @@ export async function getShadowRunOutputs(shadowRunId: string): Promise<ShadowIn
   const total = typeof data?.total === 'number' ? data.total : items.length;
   return { items, total };
 }
-
 
 
 

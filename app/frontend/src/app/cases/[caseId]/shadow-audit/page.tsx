@@ -150,6 +150,12 @@ function getRawLogits(value: unknown) {
   return null;
 }
 
+function isImagingBridgeRun(run: ShadowInferenceRunItem | null) {
+  if (!run) return false;
+  const haystack = [run.adapter_code, run.model_version_id, run.model_input_schema_id].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes('imaging');
+}
+
 export default function Page({ params }: { params: Promise<{ caseId: string }> }) {
   const { caseId } = use(params);
   const searchParams = useSearchParams();
@@ -242,6 +248,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
   const limitationFlags = useMemo(() => extractLimitations(featuredOutput?.limitations_json), [featuredOutput]);
   const confidenceInfo = useMemo(() => getConfidenceInfo(featuredOutput?.confidence_json), [featuredOutput]);
   const rawLogits = useMemo(() => getRawLogits(featuredOutput?.prediction_raw_json), [featuredOutput]);
+  const featuredIsImagingBridge = useMemo(() => isImagingBridgeRun(featuredRun), [featuredRun]);
   const probabilityUncalibrated = limitationFlags.some((flag) => flag === 'probability_uncalibrated') || confidenceInfo.calibrated === false;
   const extremeProbabilityWarning = limitationFlags.some((flag) => flag === 'extreme_probability_not_clinical_certainty');
   const notExternallyValidated = limitationFlags.some((flag) => flag === 'not_externally_validated');
@@ -255,6 +262,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
     { title: 'artifact_hash', dataIndex: 'artifact_hash', render: (value: string | null | undefined) => renderText(value) },
     { title: 'adapter_code', dataIndex: 'adapter_code', render: (value: string | null | undefined) => renderText(value) },
     { title: 'status', dataIndex: 'status', render: (value: string | null | undefined) => renderText(value) },
+    { title: 'prototype_state', dataIndex: 'prototype_state', render: (value: string | null | undefined) => renderText(value) },
     { title: 'runtime_stub', dataIndex: 'runtime_stub', render: (value: boolean | null | undefined) => renderBoolTag(value) },
     { title: 'not_for_diagnosis', dataIndex: 'not_for_diagnosis', render: (value: boolean | null | undefined) => renderBoolTag(value) },
     { title: 'started_at', dataIndex: 'started_at', render: (value: string | null | undefined) => renderText(value) },
@@ -281,6 +289,31 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
         description='该结果来自尚未完全确认的前端输入 schema，不能作为可靠评估。当前 36 个前端输入字段尚未确认等同于 fold5 真实训练输入，CAP/COP 原表与当前输入 schema 存在字段差异，Sex 等字段编码未验证。'
         style={{ marginTop: 12 }}
       />
+
+      {featuredIsImagingBridge ? (
+        <Card title='影像 ResNet18 旁路桥接状态' size='small'>
+          <Space direction='vertical' size={8} style={{ width: '100%' }}>
+            <Alert
+              type='warning'
+              showIcon
+              message='影像 ResNet18 旁路桥接：已接通原型 runner'
+              description='当前状态：未执行真实推理 / 原型未加载。shadow_disabled（Shadow 已禁用）/ imaging_runner_not_loaded（影像原型未加载）/ prototype_not_executed（原型未执行）。不用于诊断，不生成正式推荐，不写病例证据图。'
+            />
+            <Descriptions bordered size='small' column={2}>
+              <Descriptions.Item label='shadow_run_id'>{featuredRun?.shadow_run_id || '-'}</Descriptions.Item>
+              <Descriptions.Item label='状态'>{renderText(featuredRun?.status)}</Descriptions.Item>
+              <Descriptions.Item label='error_code'>{renderText(featuredRun?.error_code)}</Descriptions.Item>
+              <Descriptions.Item label='prototype_state'>{renderText(featuredRun?.prototype_state)}</Descriptions.Item>
+              <Descriptions.Item label='artifact_hash'>{renderText(featuredRun?.artifact_hash)}</Descriptions.Item>
+              <Descriptions.Item label='started_at'>{renderText(featuredRun?.started_at)}</Descriptions.Item>
+              <Descriptions.Item label='created_at'>{renderText(featuredRun?.created_at)}</Descriptions.Item>
+              <Descriptions.Item label='桥接入口'>
+                <Link href={'/cases/' + caseId + '/shadow-audit?shadow_run_id=' + (featuredRun?.shadow_run_id || '')}>查看影像 Shadow 审计</Link>
+              </Descriptions.Item>
+            </Descriptions>
+          </Space>
+        </Card>
+      ) : null}
 
       <Card title='入口说明' extra={<Link href={'/cases/' + caseId + '/small-models'}>返回小模型分析</Link>}>
         <Space direction='vertical' size={8}>
@@ -414,6 +447,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
                       <Descriptions.Item label='制品哈希'>{renderText(run.artifact_hash)}</Descriptions.Item>
                       <Descriptions.Item label='适配器代码'>{renderText(run.adapter_code)}</Descriptions.Item>
                       <Descriptions.Item label='状态'>{renderText(run.status)}</Descriptions.Item>
+                      <Descriptions.Item label='原型状态'>{renderText(run.prototype_state)}</Descriptions.Item>
                       <Descriptions.Item label='运行模式'>{renderBoolTag(run.runtime_stub)}</Descriptions.Item>
                       <Descriptions.Item label='非诊断'>{renderBoolTag(run.not_for_diagnosis)}</Descriptions.Item>
                       <Descriptions.Item label='开始时间'>{renderText(run.started_at)}</Descriptions.Item>

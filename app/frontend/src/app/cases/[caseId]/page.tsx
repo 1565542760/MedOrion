@@ -23,6 +23,7 @@ type CaseContext = {
   imagingInputCount: number;
   latestShadowRun: ShadowInferenceRunItem | null;
   latestShadowOutput: ShadowInferenceRunOutputItem | null;
+  latestImagingRun: ShadowInferenceRunItem | null;
   loadingError: string;
 };
 
@@ -62,6 +63,29 @@ function getTwinLabel(context: CaseContext) {
   return '病例级肺部状态 twin 待接入';
 }
 
+function isImagingBridgeRun(run: ShadowInferenceRunItem | null) {
+  if (!run) return false;
+  const haystack = [run.adapter_code, run.model_version_id, run.model_input_schema_id].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes('imaging');
+}
+
+function getImagingStatusLabel(value?: string | null) {
+  switch ((value || '').toLowerCase()) {
+    case 'shadow_disabled':
+      return 'Shadow 已禁用';
+    case 'shadow_failed':
+      return 'Shadow 失败';
+    case 'shadow_success':
+      return 'Shadow 已完成';
+    case 'imaging_runner_not_loaded':
+      return '原型未加载';
+    case 'prototype_not_executed':
+      return '原型未执行';
+    default:
+      return value || '-';
+  }
+}
+
 export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId: string }> }) {
   const { caseId } = use(params);
   const [context, setContext] = useState<CaseContext>({
@@ -71,6 +95,7 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
     imagingInputCount: 0,
     latestShadowRun: null,
     latestShadowOutput: null,
+    latestImagingRun: null,
     loadingError: '',
   });
   const [loading, setLoading] = useState(true);
@@ -110,6 +135,9 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
         const latestShadowOutput = latestShadowRun
           ? (await getShadowRunOutputs(latestShadowRun.shadow_run_id).catch(() => ({ items: [] as ShadowInferenceRunOutputItem[], total: 0 }))).items?.[0] || null
           : null;
+        const latestImagingRun = [...shadowRuns]
+          .filter(isImagingBridgeRun)
+          .sort((a, b) => new Date(b.started_at || b.created_at || 0).getTime() - new Date(a.started_at || a.created_at || 0).getTime())[0] || null;
 
         setContext({
           caseItem,
@@ -118,6 +146,7 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
           imagingInputCount: imagingInputs.length,
           latestShadowRun,
           latestShadowOutput,
+          latestImagingRun,
           loadingError: '',
         });
       } catch {
@@ -311,6 +340,37 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
                       <Typography.Text>多模态融合先保留位置，不在本阶段触发任何执行。</Typography.Text>
                     </Space>
                   </div>
+                </div>
+                <div style={{ marginTop: 12, border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+                  <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                    <Typography.Text type='secondary'>影像 ResNet18 旁路桥接</Typography.Text>
+                    <Alert
+                      type='warning'
+                      showIcon
+                      message='影像 ResNet18 旁路桥接：已接通原型 runner'
+                      description='当前状态：未执行真实推理 / 原型未加载。shadow_disabled（Shadow 已禁用）/ imaging_runner_not_loaded（影像原型未加载）/ prototype_not_executed（原型未执行）。不用于诊断，不生成正式推荐，不写病例证据图。'
+                    />
+                    {context.latestImagingRun ? (
+                      <Descriptions bordered size='small' column={2}>
+                        <Descriptions.Item label='shadow_run_id'>{context.latestImagingRun.shadow_run_id}</Descriptions.Item>
+                        <Descriptions.Item label='状态'>{getImagingStatusLabel(context.latestImagingRun.status)}</Descriptions.Item>
+                        <Descriptions.Item label='error_code'>{getImagingStatusLabel(context.latestImagingRun.error_code)}</Descriptions.Item>
+                        <Descriptions.Item label='prototype_state'>{getImagingStatusLabel(context.latestImagingRun.prototype_state)}</Descriptions.Item>
+                        <Descriptions.Item label='artifact_hash'>{context.latestImagingRun.artifact_hash || '-'}</Descriptions.Item>
+                        <Descriptions.Item label='started_at'>{context.latestImagingRun.started_at || '-'}</Descriptions.Item>
+                        <Descriptions.Item label='created_at'>{context.latestImagingRun.created_at || '-'}</Descriptions.Item>
+                        <Descriptions.Item label='桥接入口'>
+                          <Link href={'/cases/' + caseId + '/shadow-audit?shadow_run_id=' + context.latestImagingRun.shadow_run_id}>查看影像 Shadow 审计</Link>
+                        </Descriptions.Item>
+                      </Descriptions>
+                    ) : (
+                      <Space direction='vertical' size={4}>
+                        <Typography.Text>暂无影像 Shadow 审计记录。</Typography.Text>
+                        <Typography.Text type='secondary'>影像桥接位置已预留在病例工作台，但当前病例还没有可展示的运行记录。</Typography.Text>
+                        <Link href={'/cases/' + caseId + '/shadow-audit'}>前往影像 Shadow 审计</Link>
+                      </Space>
+                    )}
+                  </Space>
                 </div>
               </Space>
             ),
