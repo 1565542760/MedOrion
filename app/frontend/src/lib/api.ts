@@ -1,4 +1,4 @@
-import axios from 'axios';
+﻿import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 
 type ApiMode = 'mock' | 'backend';
@@ -165,6 +165,21 @@ function unwrapItem<T>(data: unknown): T {
     return (data as { item: T }).item;
   }
   return data as T;
+}
+
+function extractPreprocessingSummary(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const summary = raw.preprocessing_summary;
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null;
+  return summary as Record<string, unknown>;
+}
+
+function enrichShadowRunOutputItem(item: ShadowInferenceRunOutputItem): ShadowInferenceRunOutputItem {
+  return {
+    ...item,
+    preprocessing_summary: item.preprocessing_summary || extractPreprocessingSummary(item.prediction_raw_json),
+  };
 }
 
 export const apiConfig = { mode: API_MODE, baseURL: API_BASE_URL };
@@ -1492,6 +1507,7 @@ export type ShadowInferenceRunOutputItem = {
   uncertainty_json?: Record<string, unknown> | null;
   limitations_json?: Record<string, unknown> | null;
   input_quality_flags_json?: Record<string, unknown> | null;
+  preprocessing_summary?: Record<string, unknown> | null;
   created_at?: string | null;
 };
 
@@ -1655,6 +1671,7 @@ export async function getShadowRunOutputs(shadowRunId: string): Promise<ShadowIn
           uncertainty_json: { value: 0.18 },
           limitations_json: { notes: ['metadata_only', 'not_for_diagnosis'] },
           input_quality_flags_json: { missing_required_features: [] },
+          preprocessing_summary: { synthetic_only: true, runner_mode: 'metadata_only_stub' },
           created_at: new Date().toISOString(),
         },
       ],
@@ -1662,7 +1679,7 @@ export async function getShadowRunOutputs(shadowRunId: string): Promise<ShadowIn
     };
   }
   const data = (await client.get('/api/v1/shadow-inference-runs/' + shadowRunId + '/outputs')).data;
-  const items = unwrapList<ShadowInferenceRunOutputItem>(data);
+  const items = unwrapList<ShadowInferenceRunOutputItem>(data).map(enrichShadowRunOutputItem);
   const total = typeof data?.total === 'number' ? data.total : items.length;
   return { items, total };
 }

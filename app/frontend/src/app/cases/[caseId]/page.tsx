@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { use, useEffect, useMemo, useState } from 'react';
@@ -24,6 +24,7 @@ type CaseContext = {
   latestShadowRun: ShadowInferenceRunItem | null;
   latestShadowOutput: ShadowInferenceRunOutputItem | null;
   latestImagingRun: ShadowInferenceRunItem | null;
+  latestImagingOutput: ShadowInferenceRunOutputItem | null;
   loadingError: string;
 };
 
@@ -81,9 +82,60 @@ function getImagingStatusLabel(value?: string | null) {
       return '原型未加载';
     case 'prototype_not_executed':
       return '原型未执行';
+    case 'real_shadow_executed':
+      return '已完成受控 shadow';
     default:
       return value || '-';
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function extractProbabilityMap(value: unknown) {
+  return isRecord(value) ? value : {};
+}
+
+function getProbability(probabilities: Record<string, unknown>, key: string) {
+  const direct = probabilities[key];
+  if (direct !== undefined) return direct;
+  const upper = probabilities[key.toUpperCase()];
+  if (upper !== undefined) return upper;
+  const lower = probabilities[key.toLowerCase()];
+  if (lower !== undefined) return lower;
+  return null;
+}
+
+function formatProbability(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const text = value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+    return text || '0';
+  }
+  if (typeof value === 'string' && value.trim()) return value;
+  return '-';
+}
+
+function getScalarValue(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return formatProbability(value);
+  if (typeof value === 'string' && value.trim()) return value;
+  if (isRecord(value) && 'value' in value) return formatProbability(value.value);
+  return '-';
+}
+
+function renderJsonBlock(value: unknown) {
+  return (
+    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 6, padding: 12, maxWidth: '100%' }}>
+      {typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2)}
+    </pre>
+  );
+}
+
+function getImagingCandidateSummary(label?: string | null) {
+  if (!label) return '-';
+  if (label === 'COP') return 'COP 倾向';
+  if (label === 'CAP') return 'CAP 倾向';
+  return label;
 }
 
 export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId: string }> }) {
@@ -96,6 +148,7 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
     latestShadowRun: null,
     latestShadowOutput: null,
     latestImagingRun: null,
+    latestImagingOutput: null,
     loadingError: '',
   });
   const [loading, setLoading] = useState(true);
@@ -138,6 +191,9 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
         const latestImagingRun = [...shadowRuns]
           .filter(isImagingBridgeRun)
           .sort((a, b) => new Date(b.started_at || b.created_at || 0).getTime() - new Date(a.started_at || a.created_at || 0).getTime())[0] || null;
+        const latestImagingOutput = latestImagingRun
+          ? (await getShadowRunOutputs(latestImagingRun.shadow_run_id).catch(() => ({ items: [] as ShadowInferenceRunOutputItem[], total: 0 }))).items?.[0] || null
+          : null;
 
         setContext({
           caseItem,
@@ -147,6 +203,7 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
           latestShadowRun,
           latestShadowOutput,
           latestImagingRun,
+          latestImagingOutput,
           loadingError: '',
         });
       } catch {
@@ -188,8 +245,16 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
     },
     {
       title: 'imaging ResNet18 shadow 状态',
-      badge: '原型候选 / 未执行',
-      description: '当前只有 artifact preflight 和 runner prototype candidate，前端不把它包装成真实结果。',
+      badge: context.latestImagingRun
+        ? (context.latestImagingRun.status === 'shadow_success' && context.latestImagingOutput
+          ? '已完成受控 shadow'
+          : getImagingStatusLabel(context.latestImagingRun.status))
+        : '原型候选 / 未执行',
+      description: context.latestImagingRun
+        ? (context.latestImagingRun.status === 'shadow_success' && context.latestImagingOutput
+          ? '已接通原型 runner，当前有受控 real-shadow 结果，但仍然是 synthetic-only / coursework_mvp / not_for_diagnosis。'
+          : '当前只保留原型与桥接位置，不把它包装成真实结果。')
+        : '当前只有 artifact preflight 和 runner prototype candidate，前端不把它包装成真实结果。',
     },
     {
       title: 'multimodal ResNet18 shadow 状态',
@@ -321,13 +386,64 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
                   <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
                     <Space direction='vertical' size={6}>
                       <Typography.Text type='secondary'>imaging ResNet18</Typography.Text>
-                      <Space wrap size={6}>
-                        <Tag color='gold'>artifact preflight</Tag>
-                        <Tag color='gold'>runner prototype candidate</Tag>
-                        <Tag>backend bridge stub</Tag>
-                      </Space>
-                      <Typography.Text>当前只保留原型与桥接位置，不把它包装成真实结果。</Typography.Text>
-                      <Link href={'/cases/' + caseId + '/imaging-inputs'}>查看影像输入</Link>
+                      {context.latestImagingRun && context.latestImagingRun.status === 'shadow_success' && context.latestImagingOutput ? (
+                        <>
+                          <Space wrap size={6}>
+                            <Tag color='green'>已完成受控 shadow</Tag>
+                            <Tag color='gold'>synthetic-only</Tag>
+                            <Tag color='gold'>coursework_mvp</Tag>
+                            <Tag color='orange'>not_for_diagnosis</Tag>
+                            <Tag color='blue'>prototype_state=real_shadow_executed</Tag>
+                            {(context.latestImagingOutput.prediction_probability_json as Record<string, unknown> | undefined)?.calibrated === false ? <Tag color='orange'>概率未校准</Tag> : null}
+                          </Space>
+                          <Alert
+                            type='warning'
+                            showIcon
+                            message='影像 ResNet18 旁路评估：已完成受控 shadow'
+                            description='candidate_label、CAP/COP 概率、confidence 和 uncertainty 仅用于课程 shadow 演示，不代表诊断结论。'
+                          />
+                          <Descriptions bordered size='small' column={2}>
+                            <Descriptions.Item label='旁路候选标签'>{getImagingCandidateSummary(context.latestImagingOutput.candidate_label)}</Descriptions.Item>
+                            <Descriptions.Item label='概率 CAP'>{formatProbability(getProbability(extractProbabilityMap(context.latestImagingOutput.prediction_probability_json), 'CAP'))}</Descriptions.Item>
+                            <Descriptions.Item label='概率 COP'>{formatProbability(getProbability(extractProbabilityMap(context.latestImagingOutput.prediction_probability_json), 'COP'))}</Descriptions.Item>
+                            <Descriptions.Item label='置信度'>{getScalarValue(context.latestImagingOutput.confidence_json)}</Descriptions.Item>
+                            <Descriptions.Item label='不确定性'>{getScalarValue(context.latestImagingOutput.uncertainty_json)}</Descriptions.Item>
+                            <Descriptions.Item label='状态'>{getImagingStatusLabel(context.latestImagingRun.status)}</Descriptions.Item>
+                            <Descriptions.Item label='原型状态'>{getImagingStatusLabel(context.latestImagingRun.prototype_state)}</Descriptions.Item>
+                            <Descriptions.Item label='artifact_hash'>{context.latestImagingRun.artifact_hash || '-'}</Descriptions.Item>
+                            <Descriptions.Item label='桥接入口'><Link href={'/cases/' + caseId + '/shadow-audit?shadow_run_id=' + context.latestImagingRun.shadow_run_id}>查看影像 Shadow 审计</Link></Descriptions.Item>
+                          </Descriptions>
+                          <Card size='small' title='预处理摘要' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+                            {context.latestImagingOutput.preprocessing_summary ? renderJsonBlock(context.latestImagingOutput.preprocessing_summary) : <Typography.Text type='secondary'>暂无预处理摘要</Typography.Text>}
+                          </Card>
+                        </>
+                      ) : context.latestImagingRun ? (
+                        <>
+                          <Space wrap size={6}>
+                            <Tag color='gold'>artifact preflight</Tag>
+                            <Tag color='gold'>runner prototype candidate</Tag>
+                            <Tag>backend bridge stub</Tag>
+                          </Space>
+                          <Alert
+                            type='warning'
+                            showIcon
+                            message='影像 ResNet18 旁路桥接：当前仍为关闭态 / 原型未执行'
+                            description='shadow_disabled、imaging_runner_not_loaded、prototype_not_executed。当前仅保留桥接位置，不构成诊断或正式推荐。'
+                          />
+                          <Typography.Text>当前只保留原型与桥接位置，不把它包装成真实结果。</Typography.Text>
+                          <Link href={'/cases/' + caseId + '/imaging-inputs'}>查看影像输入</Link>
+                        </>
+                      ) : (
+                        <>
+                          <Space wrap size={6}>
+                            <Tag color='gold'>artifact preflight</Tag>
+                            <Tag color='gold'>runner prototype candidate</Tag>
+                            <Tag>backend bridge stub</Tag>
+                          </Space>
+                          <Typography.Text>当前只保留原型与桥接位置，不把它包装成真实结果。</Typography.Text>
+                          <Link href={'/cases/' + caseId + '/imaging-inputs'}>查看影像输入</Link>
+                        </>
+                      )}
                     </Space>
                   </div>
                   <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
@@ -416,6 +532,12 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
                     </Space>
                   </div>
                 </div>
+                <Alert
+                  type='info'
+                  showIcon
+                  message={context.latestImagingOutput?.candidate_label ? ('CAP/COP 影像旁路状态：' + getImagingCandidateSummary(context.latestImagingOutput.candidate_label)) : 'CAP/COP 影像旁路状态：待建立'}
+                  description='仅供课程 shadow 演示，不代表诊断结论，需医生复核。'
+                />
                 <Alert
                   type='warning'
                   showIcon

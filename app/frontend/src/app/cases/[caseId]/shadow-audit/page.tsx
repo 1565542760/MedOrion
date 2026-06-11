@@ -150,6 +150,12 @@ function getRawLogits(value: unknown) {
   return null;
 }
 
+function getPreprocessingSummary(value: unknown) {
+  if (!isRecord(value)) return null;
+  const summary = value.preprocessing_summary;
+  return isRecord(summary) ? summary : null;
+}
+
 function isImagingBridgeRun(run: ShadowInferenceRunItem | null) {
   if (!run) return false;
   const haystack = [run.adapter_code, run.model_version_id, run.model_input_schema_id].filter(Boolean).join(' ').toLowerCase();
@@ -244,11 +250,27 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
     return outputsByRunId[featuredRun.shadow_run_id]?.[0] || null;
   }, [featuredRun, outputsByRunId]);
 
+  const imagingRuns = useMemo(() => filteredRuns.filter(isImagingBridgeRun), [filteredRuns]);
+  const featuredImagingRun = useMemo(() => {
+    if (focusRun && isImagingBridgeRun(focusRun)) return focusRun;
+    return imagingRuns[0] || null;
+  }, [focusRun, imagingRuns]);
+  const featuredImagingOutput = useMemo(() => {
+    if (!featuredImagingRun) return null;
+    return outputsByRunId[featuredImagingRun.shadow_run_id]?.[0] || null;
+  }, [featuredImagingRun, outputsByRunId]);
+
   const probabilityMap = useMemo(() => extractProbabilityMap(featuredOutput?.prediction_probability_json), [featuredOutput]);
   const limitationFlags = useMemo(() => extractLimitations(featuredOutput?.limitations_json), [featuredOutput]);
   const confidenceInfo = useMemo(() => getConfidenceInfo(featuredOutput?.confidence_json), [featuredOutput]);
   const rawLogits = useMemo(() => getRawLogits(featuredOutput?.prediction_raw_json), [featuredOutput]);
-  const featuredIsImagingBridge = useMemo(() => isImagingBridgeRun(featuredRun), [featuredRun]);
+    const imagingProbabilityMap = useMemo(() => extractProbabilityMap(featuredImagingOutput?.prediction_probability_json), [featuredImagingOutput]);
+  const imagingConfidenceInfo = useMemo(() => getConfidenceInfo(featuredImagingOutput?.confidence_json), [featuredImagingOutput]);
+    const imagingRawLogits = useMemo(() => getRawLogits(featuredImagingOutput?.prediction_raw_json), [featuredImagingOutput]);
+    const imagingPreprocessingSummary = useMemo(() => getPreprocessingSummary(featuredImagingOutput?.prediction_raw_json), [featuredImagingOutput]);
+    const imagingProbabilityUncalibrated = imagingProbabilityMap && (imagingProbabilityMap.calibrated === false || imagingConfidenceInfo.calibrated === false);
+    const imagingIsSuccess = Boolean(featuredImagingRun && featuredImagingRun.status === 'shadow_success' && featuredImagingOutput);
+    const imagingOutput = featuredImagingOutput;
   const probabilityUncalibrated = limitationFlags.some((flag) => flag === 'probability_uncalibrated') || confidenceInfo.calibrated === false;
   const extremeProbabilityWarning = limitationFlags.some((flag) => flag === 'extreme_probability_not_clinical_certainty');
   const notExternallyValidated = limitationFlags.some((flag) => flag === 'not_externally_validated');
@@ -290,30 +312,92 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
         style={{ marginTop: 12 }}
       />
 
-      {featuredIsImagingBridge ? (
-        <Card title='影像 ResNet18 旁路桥接状态' size='small'>
-          <Space direction='vertical' size={8} style={{ width: '100%' }}>
-            <Alert
-              type='warning'
-              showIcon
-              message='影像 ResNet18 旁路桥接：已接通原型 runner'
-              description='当前状态：未执行真实推理 / 原型未加载。shadow_disabled（Shadow 已禁用）/ imaging_runner_not_loaded（影像原型未加载）/ prototype_not_executed（原型未执行）。不用于诊断，不生成正式推荐，不写病例证据图。'
-            />
-            <Descriptions bordered size='small' column={2}>
-              <Descriptions.Item label='shadow_run_id'>{featuredRun?.shadow_run_id || '-'}</Descriptions.Item>
-              <Descriptions.Item label='状态'>{renderText(featuredRun?.status)}</Descriptions.Item>
-              <Descriptions.Item label='error_code'>{renderText(featuredRun?.error_code)}</Descriptions.Item>
-              <Descriptions.Item label='prototype_state'>{renderText(featuredRun?.prototype_state)}</Descriptions.Item>
-              <Descriptions.Item label='artifact_hash'>{renderText(featuredRun?.artifact_hash)}</Descriptions.Item>
-              <Descriptions.Item label='started_at'>{renderText(featuredRun?.started_at)}</Descriptions.Item>
-              <Descriptions.Item label='created_at'>{renderText(featuredRun?.created_at)}</Descriptions.Item>
-              <Descriptions.Item label='桥接入口'>
-                <Link href={'/cases/' + caseId + '/shadow-audit?shadow_run_id=' + (featuredRun?.shadow_run_id || '')}>查看影像 Shadow 审计</Link>
-              </Descriptions.Item>
-            </Descriptions>
-          </Space>
-        </Card>
-      ) : null}
+        {featuredImagingRun ? (
+          <Card title='影像 ResNet18 旁路桥接状态' size='small'>
+            <Space direction='vertical' size={8} style={{ width: '100%' }}>
+              {imagingIsSuccess ? (
+                <>
+                  <Space wrap size={6}>
+                    <Tag color='green'>已完成受控 shadow</Tag>
+                    <Tag color='gold'>synthetic-only</Tag>
+                    <Tag color='gold'>coursework_mvp</Tag>
+                    <Tag color='orange'>not_for_diagnosis</Tag>
+                    <Tag color='blue'>prototype_state=real_shadow_executed</Tag>
+                    {imagingProbabilityUncalibrated ? <Tag color='orange'>概率未校准</Tag> : null}
+                  </Space>
+                  <Alert
+                    type='warning'
+                    showIcon
+                    message='影像 ResNet18 旁路评估：已完成受控 shadow'
+                    description='candidate_label、CAP/COP 概率、confidence 和 uncertainty 仅用于课程 shadow 演示，不代表诊断结论。'
+                  />
+                  <Descriptions bordered size='small' column={2}>
+                    <Descriptions.Item label='shadow_run_id'>{featuredImagingRun.shadow_run_id || '-'}</Descriptions.Item>
+                    <Descriptions.Item label='旁路候选标签'>{renderText(imagingOutput?.candidate_label)}</Descriptions.Item>
+                    <Descriptions.Item label='概率输出 CAP'>{formatProbability(getProbability(imagingProbabilityMap, 'CAP'))}</Descriptions.Item>
+                    <Descriptions.Item label='概率输出 COP'>{formatProbability(getProbability(imagingProbabilityMap, 'COP'))}</Descriptions.Item>
+                    <Descriptions.Item label='置信度'>{imagingConfidenceInfo.valueText}</Descriptions.Item>
+                    <Descriptions.Item label='不确定性'>{renderJson(imagingOutput?.uncertainty_json)}</Descriptions.Item>
+                    <Descriptions.Item label='状态'>{renderText(featuredImagingRun.status)}</Descriptions.Item>
+                    <Descriptions.Item label='prototype_state'>{renderText(featuredImagingRun.prototype_state)}</Descriptions.Item>
+                    <Descriptions.Item label='artifact_hash'>{renderText(featuredImagingRun.artifact_hash)}</Descriptions.Item>
+                    <Descriptions.Item label='started_at'>{renderText(featuredImagingRun.started_at)}</Descriptions.Item>
+                    <Descriptions.Item label='created_at'>{renderText(featuredImagingRun.created_at)}</Descriptions.Item>
+                    <Descriptions.Item label='桥接入口'>
+                      <Link href={'/cases/' + caseId + '/shadow-audit?shadow_run_id=' + featuredImagingRun.shadow_run_id}>查看影像 Shadow 审计</Link>
+                    </Descriptions.Item>
+                  </Descriptions>
+                  <Card size='small' title='预处理摘要' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+                    {imagingPreprocessingSummary ? renderJson(imagingPreprocessingSummary) : <Typography.Text type='secondary'>暂无预处理摘要</Typography.Text>}
+                  </Card>
+                  {imagingRawLogits ? (
+                    <Collapse
+                      size='small'
+                      items={[
+                        {
+                          key: 'raw-imaging-output',
+                          label: '原始影像输出（raw logits）',
+                          children: (
+                            <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                              <Typography.Text type='secondary'>原始影像输出仅用于 shadow 审计和技术复核，不作为临床结论主体。</Typography.Text>
+                              <Card size='small' title='logits（技术复核）'>
+                                {renderJson(imagingRawLogits)}
+                              </Card>
+                              <Card size='small' title='prediction_raw_json（技术复核）'>
+                                {renderJson(imagingOutput?.prediction_raw_json)}
+                              </Card>
+                            </Space>
+                          ),
+                        },
+                      ]}
+                    />
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Alert
+                    type='warning'
+                    showIcon
+                    message='影像 ResNet18 旁路桥接：已接通原型 runner'
+                    description='当前状态：未执行真实推理 / 原型未加载。shadow_disabled（Shadow 已禁用）/ imaging_runner_not_loaded（影像原型未加载）/ prototype_not_executed（原型未执行）。不用于诊断，不生成正式推荐，不写病例证据图。'
+                  />
+                  <Descriptions bordered size='small' column={2}>
+                    <Descriptions.Item label='shadow_run_id'>{featuredImagingRun.shadow_run_id || '-'}</Descriptions.Item>
+                    <Descriptions.Item label='状态'>{renderText(featuredImagingRun.status)}</Descriptions.Item>
+                    <Descriptions.Item label='error_code'>{renderText(featuredImagingRun.error_code)}</Descriptions.Item>
+                    <Descriptions.Item label='prototype_state'>{renderText(featuredImagingRun.prototype_state)}</Descriptions.Item>
+                    <Descriptions.Item label='artifact_hash'>{renderText(featuredImagingRun.artifact_hash)}</Descriptions.Item>
+                    <Descriptions.Item label='started_at'>{renderText(featuredImagingRun.started_at)}</Descriptions.Item>
+                    <Descriptions.Item label='created_at'>{renderText(featuredImagingRun.created_at)}</Descriptions.Item>
+                    <Descriptions.Item label='桥接入口'>
+                      <Link href={'/cases/' + caseId + '/shadow-audit?shadow_run_id=' + featuredImagingRun.shadow_run_id}>查看影像 Shadow 审计</Link>
+                    </Descriptions.Item>
+                  </Descriptions>
+                </>
+              )}
+            </Space>
+          </Card>
+        ) : null}
 
       <Card title='入口说明' extra={<Link href={'/cases/' + caseId + '/small-models'}>返回小模型分析</Link>}>
         <Space direction='vertical' size={8}>
@@ -470,11 +554,12 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
                               { title: '旁路候选标签', dataIndex: 'candidate_label', render: (value: string | null | undefined) => renderText(value) },
                               { title: '概率输出', dataIndex: 'prediction_probability_json', render: (value: unknown) => renderJson(value) },
                               { title: '置信度', dataIndex: 'confidence_json', render: (value: unknown) => renderJson(value) },
-                              { title: '不确定性', dataIndex: 'uncertainty_json', render: (value: unknown) => renderJson(value) },
-                              { title: '限制说明', dataIndex: 'limitations_json', render: (value: unknown) => renderJson(value) },
-                              { title: '输入质量标记', dataIndex: 'input_quality_flags_json', render: (value: unknown) => renderJson(value) },
-                            ]}
-                          />
+                                { title: '不确定性', dataIndex: 'uncertainty_json', render: (value: unknown) => renderJson(value) },
+                                { title: '限制说明', dataIndex: 'limitations_json', render: (value: unknown) => renderJson(value) },
+                                { title: '输入质量标记', dataIndex: 'input_quality_flags_json', render: (value: unknown) => renderJson(value) },
+                                { title: '预处理摘要', dataIndex: 'preprocessing_summary', render: (value: unknown) => renderJson(value) },
+                              ]}
+                            />
                         )}
                       </Card>
                     </Space>
