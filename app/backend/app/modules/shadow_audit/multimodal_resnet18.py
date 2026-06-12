@@ -15,6 +15,10 @@ from sqlalchemy.orm import Session
 from app.core.access_control import require_case_access, require_snapshot_access
 from app.db.models import Case, CaseImagingInput, CaseModelInputSnapshot, ModelRegistry, ModelVersion, User
 from app.modules.model_input.router import build_model_input_assessment_from_schema, build_model_input_schema_for_version
+from app.modules.shadow_audit.imaging_contract import (
+    imaging_preprocessing_metadata,
+    require_preprocessed_imaging_reference,
+)
 from app.modules.shadow_audit.multimodal_runner_bridge import invoke_multimodal_runner
 from app.modules.shadow_audit.schemas import (
     ControlledShadowMultimodalResNet18OneShotRequestV1,
@@ -235,8 +239,6 @@ def _coerce_runner_numeric_value(value: Any) -> float | None:
         normalized = value.strip().lower()
         if not normalized:
             return None
-        if normalized in MULTIMODAL_RUNNER_CATEGORICAL_MAP:
-            return float(MULTIMODAL_RUNNER_CATEGORICAL_MAP[normalized])
         for separator in (" ", ",", ";", "\t"):
             normalized = normalized.replace(separator, " ")
         token = normalized.split(" ", 1)[0]
@@ -249,27 +251,33 @@ def _coerce_runner_numeric_value(value: Any) -> float | None:
 
 def _clinical_feature_values(snapshot: CaseModelInputSnapshot) -> tuple[dict[str, float], dict[str, Any]]:
     mapped = snapshot.mapped_features_json if isinstance(snapshot.mapped_features_json, dict) else {}
+    if not mapped:
+        raise RuntimeError("clinical_input_insufficient: clinical snapshot missing mapped_features_json")
     feature_columns = _runner_feature_columns()
+    mapped_keys = list(mapped.keys())
+    missing = [feature_name for feature_name in feature_columns if feature_name not in mapped]
+    if missing:
+        raise RuntimeError(f"clinical_input_insufficient: missing features {missing}")
     runner_values: dict[str, float] = {}
-    translated_from: list[str] = []
-    explicit_defaults: list[str] = []
+    invalid: list[str] = []
     for feature_name in feature_columns:
-        source_name = MULTIMODAL_RUNNER_ALIAS_MAP.get(feature_name, feature_name)
-        raw_value = mapped.get(source_name)
-        numeric_value = _coerce_runner_numeric_value(raw_value)
+        numeric_value = _coerce_runner_numeric_value(mapped.get(feature_name))
         if numeric_value is None:
-            numeric_value = 0.0
-            explicit_defaults.append(feature_name)
-        else:
-            translated_from.append(source_name)
+            invalid.append(feature_name)
+            continue
         runner_values[feature_name] = float(numeric_value)
+    if invalid:
+        raise RuntimeError(f"clinical_input_insufficient: non-numeric features {invalid}")
     summary = {
         "feature_order": feature_columns,
         "feature_count": len(feature_columns),
-        "translation_mode": "explicit_alias_and_default_mapping",
-        "translated_from_snapshot_features": sorted(set(translated_from)),
-        "explicit_default_features": sorted(set(explicit_defaults)),
-        "note": "Snapshot clinical provenance is mapped into the runner artifact feature order with explicit defaults for unmapped runner columns.",
+        "translation_mode": "strict_exact_artifact_order",
+        "default_fallback_allowed": False,
+        "alias_mapping_allowed": False,
+        "translated_from_snapshot_features": feature_columns,
+        "explicit_default_features": [],
+        "snapshot_extra_features": [feature_name for feature_name in mapped_keys if feature_name not in feature_columns],
+        "note": "Snapshot clinical provenance must already match the runner artifact feature order without alias or default fallback.",
     }
     summary["runner_feature_values"] = runner_values
     return runner_values, summary
@@ -309,6 +317,7 @@ def _runtime_env(
         "modality": input_row.modality,
         "source_type": input_row.source_type,
         "storage_uri_ref": input_row.storage_uri,
+        "imaging_contract": imaging_preprocessing_metadata(input_row),
         "artifact_preflight": artifact_preflight or {},
         "runner_response": runner_response or {},
         "clinical_schema_id": snapshot.model_input_schema_id,
@@ -349,6 +358,7 @@ def _error_detail(
         "input_asset_id": input_row.input_asset_id,
         "input_snapshot_id": snapshot.input_snapshot_id,
         "trace_id": snapshot.trace_id,
+        "imaging_contract": imaging_preprocessing_metadata(input_row),
         "artifact_preflight": artifact_preflight or {},
         "runner_response": runner_response or {},
         "runner_state": runner_state,
@@ -470,6 +480,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "imaging_input_not_eligible", "message": "Imaging input must be deidentified and not_for_diagnosis"})
     if _normalize_source_type(input_row.source_type) not in MULTIMODAL_ALLOWED_SOURCE_TYPES:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_source_type", "message": "Only synthetic imaging inputs are allowed for this coursework bridge"})
+    imaging_contract = require_preprocessed_imaging_reference(input_row, allow_synthetic_only=True)
 
     snapshot = _require_snapshot(db, payload.input_snapshot_id)
     if snapshot.case_id != case_uuid:
@@ -732,6 +743,13 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
         "modality": input_row.modality,
         "source_type": _normalize_source_type(input_row.source_type),
         "storage_uri": input_row.storage_uri,
+        "source_format": imaging_contract["source_format"],
+        "preprocessed_format": imaging_contract["preprocessed_format"],
+        "preprocessing_script": imaging_contract["preprocessing_script"],
+        "conversion_tool": imaging_contract["conversion_tool"],
+        "bias_correction": imaging_contract["bias_correction"],
+        "model_input_file": imaging_contract["model_input_file"],
+        "label_file": imaging_contract["label_file"],
         "clinical_features": clinical_feature_values,
         "clinical_feature_translation_summary": clinical_feature_translation_summary,
     }
@@ -816,14 +834,14 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             dry_run_label=payload.dry_run_label,
             mode="real_shadow_candidate",
             artifact_hash=artifact_hash,
-        artifact_preflight=artifact_preflight,
-        runner_response=runner_payload,
-        runner_state="failed",
-        prototype_state="runner_failed",
-        clinical_feature_values=clinical_feature_values,
-        clinical_feature_translation_summary=clinical_feature_translation_summary,
-        real_inference=False,
-    )
+            artifact_preflight=artifact_preflight,
+            runner_response=runner_payload,
+            runner_state="failed",
+            prototype_state="runner_failed",
+            clinical_feature_values=clinical_feature_values,
+            clinical_feature_translation_summary=clinical_feature_translation_summary,
+            real_inference=False,
+        )
 
     probabilities = runner_payload.get("probabilities") if isinstance(runner_payload.get("probabilities"), dict) else {}
     confidence = runner_payload.get("confidence")
@@ -873,6 +891,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             "logits": [float(v) for v in (runner_payload.get("logits") if isinstance(runner_payload.get("logits"), list) else [])],
             "image_preprocessing_summary": runner_payload.get("image_preprocessing_summary") if isinstance(runner_payload.get("image_preprocessing_summary"), dict) else {},
             "clinical_preprocessing_summary": runner_payload.get("clinical_preprocessing_summary") if isinstance(runner_payload.get("clinical_preprocessing_summary"), dict) else {},
+            "imaging_contract": imaging_contract,
             "fusion_architecture": runner_payload.get("fusion_architecture"),
             "runner_runtime": runner_payload.get("runtime_env") if isinstance(runner_payload.get("runtime_env"), dict) else {},
             "dry_run_label": payload.dry_run_label,
@@ -912,6 +931,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             "fold": "fold1",
             "label_mapping": {"CAP": 0, "COP": 1},
             "source_type": _normalize_source_type(input_row.source_type),
+            "imaging_contract": imaging_contract,
             "artifact_hash": artifact_hash,
         },
         "input_quality_flags_json": {
@@ -923,6 +943,13 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             "clinical_schema_id": schema_item.model_input_schema_id,
             "clinical_feature_count": schema_item.feature_count,
             "preprocess_artifact_applied": True,
+            "source_format": imaging_contract["source_format"],
+            "preprocessed_format": imaging_contract["preprocessed_format"],
+            "preprocessing_script": imaging_contract["preprocessing_script"],
+            "conversion_tool": imaging_contract["conversion_tool"],
+            "bias_correction": imaging_contract["bias_correction"],
+            "model_input_file": imaging_contract["model_input_file"],
+            "label_file": imaging_contract["label_file"],
             "runner_exit_code": runner_result.exit_code,
             "dry_run_label": payload.dry_run_label,
         },

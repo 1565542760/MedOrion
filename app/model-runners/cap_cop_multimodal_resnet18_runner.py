@@ -34,6 +34,13 @@ LABEL_MAPPING = {"CAP": 0, "COP": 1}
 EXPECTED_MODALITY_SCOPE = "ct_image+clinical_table"
 EXPECTED_SHAPE = (96, 96, 96)
 EXPECTED_SOURCE_TYPE = "synthetic"
+SOURCE_FORMAT_DICOM_SERIES = "dicom_series"
+PREPROCESSED_FORMAT_NIFTI_NII_GZ = "nifti_nii_gz"
+PREPROCESSING_SCRIPT_NAME = "dcmtonii_N4.py"
+CONVERSION_TOOL_NAME = "dcm2niix"
+BIAS_CORRECTION_NAME = "N4BiasFieldCorrection"
+MODEL_INPUT_FILE_NAME = "image.nii.gz"
+LABEL_FILE_NAME = "label.nii.gz"
 
 
 def _emit(payload: dict[str, Any], exit_code: int = 0) -> int:
@@ -128,6 +135,14 @@ def _load_json(path: Path) -> dict[str, Any]:
     if not isinstance(obj, dict):
         raise RuntimeError(f"invalid_artifact: {path}")
     return obj
+
+def _normalize_contract_text(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _looks_like_preprocessed_nifti(path: Path) -> bool:
+    lowered = str(path).lower()
+    return lowered.endswith(".nii") or lowered.endswith(".nii.gz")
 
 
 def _load_clinical_artifact() -> tuple[list[str], dict[str, float], dict[str, float], dict[str, Any]]:
@@ -275,6 +290,14 @@ def _prepare_image(
     if source_type != EXPECTED_SOURCE_TYPE:
         raise RuntimeError("unsupported_source_type: expected synthetic")
 
+    source_format = _normalize_contract_text(payload.get("source_format"))
+    preprocessed_format = _normalize_contract_text(payload.get("preprocessed_format"))
+    preprocessing_script = str(payload.get("preprocessing_script") or PREPROCESSING_SCRIPT_NAME).strip()
+    conversion_tool = str(payload.get("conversion_tool") or CONVERSION_TOOL_NAME).strip()
+    bias_correction = str(payload.get("bias_correction") or BIAS_CORRECTION_NAME).strip()
+    model_input_file = str(payload.get("model_input_file") or MODEL_INPUT_FILE_NAME).strip()
+    label_file = str(payload.get("label_file") or LABEL_FILE_NAME).strip()
+
     uri = payload.get("storage_uri") or payload.get("image_path")
     if not uri:
         raise RuntimeError("missing_required_input: storage_uri or image_path required")
@@ -282,10 +305,16 @@ def _prepare_image(
     if uri.startswith("file://"):
         uri = uri[7:]
     path = Path(uri)
+    if path.exists() and path.is_dir():
+        raise RuntimeError("imaging_input_not_preprocessed: DICOM directory requires dcmtonii_N4 preprocessing")
+    if source_format == SOURCE_FORMAT_DICOM_SERIES:
+        raise RuntimeError("imaging_input_not_preprocessed: DICOM series requires dcmtonii_N4 preprocessing")
+    if preprocessed_format and preprocessed_format not in {PREPROCESSED_FORMAT_NIFTI_NII_GZ, "synthetic_fixture"}:
+        raise RuntimeError("imaging_input_not_preprocessed: expected preprocessed nifti_nii_gz or synthetic fixture")
     if not path.exists():
         raise RuntimeError(f"input_missing: {uri}")
-    if not (str(path).endswith(".nii") or str(path).endswith(".nii.gz")):
-        raise RuntimeError("unsupported_image_format: expected .nii or .nii.gz")
+    if not _looks_like_preprocessed_nifti(path):
+        raise RuntimeError("imaging_input_not_preprocessed: expected preprocessed .nii or .nii.gz input")
 
     image = nib_module.load(str(path)).get_fdata().astype(np_module.float32)
     if image.ndim != 3:
@@ -304,6 +333,13 @@ def _prepare_image(
     tensor = F_module.interpolate(tensor, size=EXPECTED_SHAPE, mode="trilinear", align_corners=False)
     summary = {
         "source_type": source_type,
+        "source_format": source_format or "unknown",
+        "preprocessed_format": preprocessed_format or "unknown",
+        "preprocessing_script": preprocessing_script,
+        "conversion_tool": conversion_tool,
+        "bias_correction": bias_correction,
+        "model_input_file": model_input_file,
+        "label_file": label_file,
         "input_origin": str(path),
         "raw_shape": list(image.shape),
         "preprocessed_shape": list(tensor.shape),

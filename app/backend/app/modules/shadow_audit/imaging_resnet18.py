@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.core.access_control import require_case_access
 from app.db.models import Case, CaseImagingInput, User
+from app.modules.shadow_audit.imaging_contract import (
+    imaging_preprocessing_metadata,
+    require_preprocessed_imaging_reference,
+)
 from app.modules.shadow_audit.imaging_runner_bridge import invoke_imaging_runner
 from app.modules.shadow_audit.schemas import (
     ControlledShadowImagingResNet18OneShotRequestV1,
@@ -122,6 +126,7 @@ def _runner_payload(
 ) -> dict[str, Any]:
     runner_modality = "ct_image"
     source_type = _normalize_source_type(input_row.source_type)
+    contract_metadata = imaging_preprocessing_metadata(input_row)
     payload = {
         "trace_id": trace_id,
         "case_id": str(case_id),
@@ -136,6 +141,7 @@ def _runner_payload(
         "execution_mode": "real_shadow_candidate" if enable_real_shadow else "metadata_only_stub",
         "enable_real_shadow": bool(enable_real_shadow),
         "coursework_shadow_bridge": True,
+        **contract_metadata,
     }
     if dry_run_label:
         payload["dry_run_label"] = dry_run_label
@@ -158,6 +164,7 @@ def _build_output_payload(
     dry_run_label: str | None,
     runner_exit_code: int | None,
 ) -> dict[str, Any]:
+    contract_metadata = imaging_preprocessing_metadata(input_row)
     probabilities = runner_response.get("probabilities") if isinstance(runner_response.get("probabilities"), dict) else {}
     logits = runner_response.get("logits") if isinstance(runner_response.get("logits"), list) else []
     preprocessing_summary = runner_response.get("preprocessing_summary") if isinstance(runner_response.get("preprocessing_summary"), dict) else {}
@@ -210,6 +217,7 @@ def _build_output_payload(
             'label_mapping': label_mapping,
             'logits': [float(v) for v in logits],
             'preprocessing_summary': preprocessing_summary,
+            'imaging_contract': contract_metadata,
             'dry_run_label': dry_run_label,
         },
         'prediction_probability_json': {
@@ -247,6 +255,7 @@ def _build_output_payload(
             'fold': 'fold5',
             'label_mapping': {'CAP': 0, 'COP': 1},
             'source_type': _normalize_source_type(input_row.source_type),
+            'imaging_contract': contract_metadata,
         },
         'input_quality_flags_json': {
             'source_type': _normalize_source_type(input_row.source_type),
@@ -255,6 +264,13 @@ def _build_output_payload(
             'real_shadow_requested': bool(enable_real_shadow),
             'real_shadow_executed': True,
             'preprocess_artifact_applied': True,
+            'source_format': contract_metadata['source_format'],
+            'preprocessed_format': contract_metadata['preprocessed_format'],
+            'preprocessing_script': contract_metadata['preprocessing_script'],
+            'conversion_tool': contract_metadata['conversion_tool'],
+            'bias_correction': contract_metadata['bias_correction'],
+            'model_input_file': contract_metadata['model_input_file'],
+            'label_file': contract_metadata['label_file'],
             'runner_exit_code': runner_exit_code,
             'dry_run_label': dry_run_label,
         },
@@ -299,6 +315,7 @@ def _runtime_env(
         "modality": input_row.modality,
         "source_type": input_row.source_type,
         "storage_uri_ref": input_row.storage_uri,
+        "imaging_contract": imaging_preprocessing_metadata(input_row),
         "artifact_preflight": artifact_preflight,
         "runner_response": runner_response,
         "runner_state": runner_state,
@@ -364,6 +381,7 @@ def run_controlled_imaging_resnet18_one_shot_shadow(
     storage_uri = str(input_row.storage_uri or "").strip()
     if not storage_uri:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "imaging_input_not_eligible", "message": "Imaging input storage_uri must be provided"})
+    require_preprocessed_imaging_reference(input_row, allow_synthetic_only=True)
 
     enable_real_shadow = bool(payload.enable_real_shadow)
     if enable_real_shadow and normalized_source_type not in IMAGING_REAL_SHADOW_ALLOWED_SOURCE_TYPES:
