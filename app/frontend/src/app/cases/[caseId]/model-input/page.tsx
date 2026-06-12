@@ -129,6 +129,27 @@ function getMissingRequiredQuestions(item: ModelInputPreviewItem | null) {
 
 type SnapshotValue = number | string | null;
 
+function normalizeContractToken(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function splitCsvLine(value: string) {
+  return value
+    .split(',')
+    .map((item) => item.trim().replace(/^\"|\"$/g, ''))
+    .filter((item, index, array) => !(index === array.length - 1 && item === ''));
+}
+
+function parseCsvPreview(text: string) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const headers = lines[0] ? splitCsvLine(lines[0]) : [];
+  const sampleRow = lines[1] ? splitCsvLine(lines[1]) : [];
+  return { headers, sampleRow };
+}
+
 const FEATURE_LABEL_MAP: Record<string, string> = {
   Age: '年龄',
   Sex: '性别',
@@ -428,6 +449,8 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
   const [snapshotSubmitting, setSnapshotSubmitting] = useState(false);
   const [snapshotNotice, setSnapshotNotice] = useState('');
   const [snapshotNoticeType, setSnapshotNoticeType] = useState<'success' | 'info' | 'warning' | 'error'>('info');
+  const [artifactCsvText, setArtifactCsvText] = useState('');
+  const [artifactCsvPreviewReady, setArtifactCsvPreviewReady] = useState(false);
   const [snapshotRows, setSnapshotRows] = useState<ModelInputSnapshotSummaryItem[]>([]);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [shadowRunningSnapshotId, setShadowRunningSnapshotId] = useState('');
@@ -619,6 +642,28 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
   }, [caseId, caseRecord?.disease_task, selectedVersionId]);
 
   const featureRows = [...requirements].sort((left, right) => left.feature_order - right.feature_order);
+  const artifactCsvPreview = useMemo(() => parseCsvPreview(artifactCsvText), [artifactCsvText]);
+  const artifactCsvMappingRows = useMemo(() => {
+    const headers = artifactCsvPreview.headers;
+    const sampleRow = artifactCsvPreview.sampleRow;
+    return headers.map((header, index) => {
+      const normalizedHeader = normalizeContractToken(header);
+      const matchedRequirement = featureRows.find((item) => {
+        const featureMatch = normalizeContractToken(item.model_feature_name) === normalizedHeader;
+        const sourceMatch = normalizeContractToken(item.source_clinical_field || '') === normalizedHeader;
+        const labelMatch = normalizeContractToken(getFeatureDisplayName(item)) === normalizedHeader;
+        return featureMatch || sourceMatch || labelMatch;
+      }) || null;
+      return {
+        raw_column: header,
+        sample_value: sampleRow[index] || '-',
+        artifact_order: matchedRequirement ? matchedRequirement.feature_order : null,
+        target_feature: matchedRequirement ? matchedRequirement.model_feature_name : '-',
+        source_field: matchedRequirement ? (matchedRequirement.source_clinical_field || '-') : '-',
+        status: matchedRequirement ? '����֤' : 'δ��֤ / ��������ģ��',
+      };
+    });
+  }, [artifactCsvPreview.headers, artifactCsvPreview.sampleRow, featureRows]);
   const providedFeatures = getProvidedFeatures(previewResult);
   const missingFeatures = previewResult?.missing_features || validationResult?.missing_features || [];
   const missingRequiredFeatures = previewResult?.missing_required_features || validationResult?.missing_required_features || [];
@@ -663,8 +708,11 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
     .map((item) => item.model_feature_name);
   const snapshotDefaultedFeatures: string[] = [];
   const snapshotDoctorProvidedFeatures = snapshotProvidedFeatureNames;
-  const snapshotAssessmentStatus = snapshotMissingRequiredFeatures.length > 0 ? 'insufficient_data_for_assessment' : 'ready_for_inference';
-  const snapshotInsufficient = snapshotMissingRequiredFeatures.length > 0;
+  const snapshotArtifactComplete = snapshotProvidedFeatureNames.length === featureRows.length;
+  const snapshotAssessmentStatus = snapshotArtifactComplete && snapshotMissingRequiredFeatures.length === 0
+    ? 'ready_for_inference'
+    : 'insufficient_data_for_assessment';
+  const snapshotInsufficient = snapshotAssessmentStatus !== 'ready_for_inference';
   const snapshotFeatureCount = featureRows.length;
 
   async function handleFillValidationBaseline() {
@@ -714,9 +762,9 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
             feature_count: snapshotDoctorProvidedFeatures.length,
           },
         ],
-        validation_status: missingRequired.length > 0 ? 'insufficient_data_for_assessment' : 'ready_for_inference',
-        current_assessment_status: missingRequired.length > 0 ? 'insufficient_data_for_assessment' : 'ready_for_inference',
-        insufficient_data_for_assessment: missingRequired.length > 0,
+        validation_status: snapshotArtifactComplete && missingRequired.length === 0 ? 'ready_for_inference' : 'insufficient_data_for_assessment',
+        current_assessment_status: snapshotArtifactComplete && missingRequired.length === 0 ? 'ready_for_inference' : 'insufficient_data_for_assessment',
+        insufficient_data_for_assessment: !(snapshotArtifactComplete && missingRequired.length === 0),
         runtime_stub: true,
         not_for_diagnosis: true,
       };
@@ -952,6 +1000,64 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
         </div>
       </Card>
 
+
+      <Card
+        title='临床表格输入契约 / artifact-order 映射'
+        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
+      >
+        <Space direction='vertical' size={12} style={{ width: '100%' }}>
+          <Alert
+            type='warning'
+            showIcon
+            message='临床表格字段必须先映射到训练 artifact 的 36-feature order'
+            description='原始临床表格字段、CSV 列顺序、产品表单顺序和 case_model_input_snapshot 的 key 顺序都不能直接当作模型输入。只有把每个字段明确映射到 artifact 顺序后，snapshot 才能进入 ready_for_inference；否则保持 schema_unverified / insufficient_data_for_assessment。缺失字段不能 silent fallback，默认值也不能自动补齐后继续推理。'
+          />
+          <Descriptions bordered size='small' column={2}>
+            <Descriptions.Item label='原始临床表格字段'>CSV / 手工录入 / 导入粘贴的源列名</Descriptions.Item>
+            <Descriptions.Item label='训练 artifact 36-feature order'>按 feature_order 排列的训练输入顺序</Descriptions.Item>
+            <Descriptions.Item label='Snapshot'>case_model_input_snapshot，仅保存映射后的输入快照</Descriptions.Item>
+            <Descriptions.Item label='当前状态'>schema_unverified</Descriptions.Item>
+          </Descriptions>
+          <Alert
+            type='info'
+            showIcon
+            message='CSV 粘贴 / 导入只做表头与样例行解析'
+            description='下面的输入框只解析表头和第一行样例值，不会直接创建可推理 snapshot。系统会显示每个原始列名映射到哪个 36-feature，以及是否已验证。未映射字段会标记为“未验证 / 不可用于模型”。'
+          />
+          <Input.TextArea
+            value={artifactCsvText}
+            onChange={(event) => { setArtifactCsvText(event.target.value); setArtifactCsvPreviewReady(false); }}
+            placeholder={'粘贴 CSV 表头与一行样例，例如：\nAge,Sex,Temperature\n68,male,37.2'}
+            autoSize={{ minRows: 4, maxRows: 10 }}
+          />
+          <Space wrap>
+            <Button type='primary' onClick={() => setArtifactCsvPreviewReady(true)} disabled={!artifactCsvText.trim()}>解析 CSV 表头</Button>
+            <Button onClick={() => { setArtifactCsvText(''); setArtifactCsvPreviewReady(false); }}>清空</Button>
+          </Space>
+          <Typography.Text type='secondary'>
+            这里只做契约预览：原始列名 → 训练 artifact 顺序 → snapshot。未验证字段不会自动进入模型输入。
+          </Typography.Text>
+          {artifactCsvText.trim() ? (
+            <Table
+              rowKey='raw_column'
+              pagination={false}
+              size='small'
+              scroll={{ x: 'max-content' }}
+              dataSource={artifactCsvPreviewReady ? artifactCsvMappingRows : []}
+              locale={{ emptyText: artifactCsvPreviewReady ? '暂无可解析列，请检查 CSV 文本' : '点击“解析 CSV 表头”后查看映射结果' }}
+              columns={[
+                { title: '原始列名', dataIndex: 'raw_column', width: 220 },
+                { title: '样例值', dataIndex: 'sample_value', width: 160 },
+                { title: '目标 feature', dataIndex: 'target_feature', width: 180 },
+                { title: 'artifact 顺序', dataIndex: 'artifact_order', width: 120, render: (value: number | null) => (value === null ? '-' : value) },
+                { title: '映射状态', dataIndex: 'status', width: 180, render: (value: string) => <Tag color={value === '已验证' ? 'green' : 'orange'}>{value}</Tag> },
+                { title: '训练字段映射说明', dataIndex: 'source_field', render: (value: string) => value || '-' },
+              ]}
+            />
+          ) : null}
+        </Space>
+      </Card>
+
       <Card
         title='手工录入 CAP/COP 特征并创建输入快照'
         extra={
@@ -1159,10 +1265,8 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
 
       <Card title='使用说明' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
         <Space direction='vertical' size={8}>
-          <Typography.Text>1. 手工录入 36 个 CAP/COP 特征。2. 创建 case_model_input_snapshot。3. snapshot 为“可用于 Shadow 评估”时，可以手动点击“运行 CAP/COP Shadow 评估”。4. 该按钮只会调用受控 clinical MLP fold5 shadow 路径，只写 shadow 审计。5. 结果请在 Shadow 审计页查看。6. 它不是临床结论，也不会写入病例证据链。</Typography.Text>
-          <Typography.Text>2. disease_task_feature_set 是病种任务特征集合，不是全局病例表结构。</Typography.Text>
-          <Typography.Text>3. 缺少 required feature 时不能 silent fallback，只能走缺失值咨询、明确默认策略或 insufficient_data_for_assessment。</Typography.Text>
-          <Typography.Text>4. LLM 和前端参数不能绕过后端模型输入校验。</Typography.Text>
+          <Typography.Text>1. 手工录入区和 CSV 契约区都必须最终映射到训练 artifact 的 36-feature order。2. 创建 case_model_input_snapshot 时，只有 36 个字段全部明确且 required feature 不缺失，才能进入 ready_for_inference。3. snapshot 为“可用于 Shadow 评估”时，才可以手动点击“运行 CAP/COP Shadow 评估”。4. 该按钮只会调用受控 clinical MLP fold5 shadow 路径，只写 shadow 审计。5. 结果请在 Shadow 审计页查看。6. 它不是临床结论，也不会写入病例证据链。
+7. 原始临床表格字段、CSV 列顺序和 snapshot key 顺序不能直接当作模型输入。8. disease_task_feature_set 是病种任务特征集合，不是全局病例表结构。9. 缺少 required feature 时不能 silent fallback，只能走缺失值咨询、明确默认策略或 insufficient_data_for_assessment。10. LLM 和前端参数不能绕过后端模型输入校验。</Typography.Text>
         </Space>
       </Card>
     </Space>
