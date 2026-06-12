@@ -1,4 +1,4 @@
-﻿import axios from 'axios';
+import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 
 type ApiMode = 'mock' | 'backend';
@@ -112,6 +112,44 @@ export type CaseImagingInputListResponse = {
   offset: number;
   items: CaseImagingInputItem[];
 };
+
+export type DicomSeriesRegisterPayload = {
+  series_label: string;
+  source_type: string;
+  dicom_series_ref: string;
+  storage_uri?: string | null;
+  deidentified?: boolean;
+  not_for_diagnosis?: boolean;
+  provenance_json?: Record<string, unknown> | null;
+  quality_flags_json?: Record<string, unknown> | null;
+};
+
+export type DicomSeriesRegisterResponse = CaseImagingInputItem & {
+  source_format?: string | null;
+  preprocessed_format?: string | null;
+  preprocessing_status?: string | null;
+};
+
+export type ImagingPreprocessingStatusResponse = {
+  status?: string;
+  route?: string;
+  input_asset_id: string;
+  source_format?: string | null;
+  preprocessed_format?: string | null;
+  preprocessing_script?: string | null;
+  conversion_tool?: string | null;
+  bias_correction?: string | null;
+  raw_output_file?: string | null;
+  model_input_file?: string | null;
+  label_file?: string | null;
+  preprocessing_status?: string | null;
+  message?: string | null;
+};
+
+export type ImagingPreprocessResponse = ImagingPreprocessingStatusResponse & {
+  error_code?: string | null;
+};
+
 
 export type CurrentUser = {
   user_id: string;
@@ -686,6 +724,77 @@ export async function getCaseImagingInput(inputAssetId: string): Promise<CaseIma
   }
   const data = (await client.get('/api/v1/imaging-inputs/' + inputAssetId)).data;
   return unwrapItem<CaseImagingInputItem>(data);
+}
+
+export async function registerDicomSeries(caseId: string, payload: DicomSeriesRegisterPayload): Promise<DicomSeriesRegisterResponse> {
+  if (API_MODE === 'mock') {
+    const item: DicomSeriesRegisterResponse = {
+      input_asset_id: 'dicom-demo-created',
+      case_id: caseId,
+      patient_id: null,
+      trace_id: null,
+      modality: 'dicom_series',
+      source_type: payload.source_type,
+      storage_uri: payload.storage_uri || payload.dicom_series_ref,
+      deidentified: payload.deidentified ?? true,
+      not_for_diagnosis: payload.not_for_diagnosis ?? true,
+      provenance_json: payload.provenance_json || {},
+      quality_flags_json: payload.quality_flags_json || {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      source_format: 'dicom_series',
+      preprocessed_format: 'nifti_nii_gz',
+      preprocessing_status: 'pending',
+    };
+    (mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs = [item, ...((mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs || [])];
+    return item;
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/imaging-inputs/dicom-series', payload)).data;
+  return unwrapItem<DicomSeriesRegisterResponse>(data);
+}
+
+export async function getImagingPreprocessingStatus(inputAssetId: string): Promise<ImagingPreprocessingStatusResponse> {
+  if (API_MODE === 'mock') {
+    return {
+      status: 'ok',
+      route: '/api/v1/imaging-inputs/' + inputAssetId + '/preprocessing-status',
+      input_asset_id: inputAssetId,
+      source_format: 'dicom_series',
+      preprocessed_format: 'nifti_nii_gz',
+      preprocessing_script: 'dcmtonii_N4.py',
+      conversion_tool: 'dcm2niix',
+      bias_correction: 'N4BiasFieldCorrection',
+      raw_output_file: 'raw_image.nii.gz',
+      model_input_file: 'image.nii.gz',
+      label_file: 'label.nii.gz',
+      preprocessing_status: 'pending',
+    };
+  }
+  const data = (await client.get('/api/v1/imaging-inputs/' + inputAssetId + '/preprocessing-status')).data;
+  return unwrapItem<ImagingPreprocessingStatusResponse>(data);
+}
+
+export async function requestImagingPreprocess(inputAssetId: string): Promise<ImagingPreprocessResponse> {
+  if (API_MODE === 'mock') {
+    return {
+      status: 'not_implemented',
+      route: '/api/v1/imaging-inputs/' + inputAssetId + '/preprocess',
+      input_asset_id: inputAssetId,
+      source_format: 'dicom_series',
+      preprocessed_format: 'nifti_nii_gz',
+      preprocessing_script: 'dcmtonii_N4.py',
+      conversion_tool: 'dcm2niix',
+      bias_correction: 'N4BiasFieldCorrection',
+      raw_output_file: 'raw_image.nii.gz',
+      model_input_file: 'image.nii.gz',
+      label_file: 'label.nii.gz',
+      preprocessing_status: 'not_implemented',
+      error_code: 'preprocessing_not_implemented',
+      message: '当前仅为 contract placeholder，不运行 dcm2niix 或 N4。',
+    };
+  }
+  const data = (await client.post('/api/v1/imaging-inputs/' + inputAssetId + '/preprocess')).data;
+  return unwrapItem<ImagingPreprocessResponse>(data);
 }
 
 export async function listMissingValueQueries(caseId: string, traceId?: string): Promise<MissingValueListResponse> {

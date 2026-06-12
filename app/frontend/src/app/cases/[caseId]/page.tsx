@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import Link from 'next/link';
 import { use, useEffect, useMemo, useState } from 'react';
@@ -343,6 +343,14 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
                       <Tag color={context.imagingInputCount > 0 ? 'green' : 'default'}>{context.imagingInputCount > 0 ? '已登记' : '待登记'}</Tag>
                       <Typography.Text>只登记影像 metadata / reference，不上传文件，不触发模型。</Typography.Text>
                       <Link href={'/cases/' + caseId + '/imaging-inputs'}>进入影像输入</Link>
+                    </Space>
+                  </div>
+                                    <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
+                    <Space direction='vertical' size={6}>
+                      <Typography.Text type='secondary'>DICOM preprocessing contract</Typography.Text>
+                      <Tag color={context.imagingInputCount > 0 ? 'blue' : 'default'}>metadata-only</Tag>
+                      <Typography.Text>DICOM series 先登记引用，再由 dcm2niix + N4 contract 转成 image.nii.gz；label.nii.gz 只用于训练/评估引用。</Typography.Text>
+                      <Link href={'/cases/' + caseId + '/imaging-inputs'}>查看 DICOM 预处理契约</Link>
                     </Space>
                   </div>
                   <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>

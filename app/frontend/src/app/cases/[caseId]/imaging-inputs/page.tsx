@@ -6,12 +6,17 @@ import { Alert, Button, Card, Checkbox, Col, Descriptions, Form, Input, Row, Sel
 import {
   createCaseImagingInput,
   getCaseImagingInput,
+  getImagingPreprocessingStatus,
   listCaseImagingInputs,
   listCases,
   listModelInputSnapshotsByCase,
   listShadowRunsByCase,
+  registerDicomSeries,
+  requestImagingPreprocess,
   type CaseImagingInputItem,
   type CaseItem,
+  type DicomSeriesRegisterPayload,
+  type ImagingPreprocessingStatusResponse,
   type ModelInputSnapshotSummaryItem,
   type ShadowInferenceRunItem,
 } from '@/lib/api';
@@ -20,6 +25,15 @@ type ImagingFormValues = {
   trace_id?: string;
   modality?: string;
   source_type?: string;
+  storage_uri?: string;
+  provenance_json?: string;
+  quality_flags_json?: string;
+};
+
+type DicomSeriesFormValues = {
+  series_label?: string;
+  source_type?: string;
+  dicom_series_ref?: string;
   storage_uri?: string;
   provenance_json?: string;
   quality_flags_json?: string;
@@ -107,9 +121,25 @@ function renderJsonBlock(value: unknown) {
   );
 }
 
+function getPreprocessingStatusLabel(value?: string | null) {
+  switch ((value || '').toLowerCase()) {
+    case 'pending':
+      return '待预处理';
+    case 'completed':
+      return '预处理完成';
+    case 'failed':
+      return '预处理失败';
+    case 'not_implemented':
+      return '预处理未实现';
+    default:
+      return value || '-';
+  }
+}
+
 export default function Page({ params }: { params: Promise<{ caseId: string }> }) {
   const { caseId } = use(params);
   const [form] = Form.useForm<ImagingFormValues>();
+  const [dicomForm] = Form.useForm<DicomSeriesFormValues>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -119,6 +149,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
   const [details, setDetails] = useState<Record<string, CaseImagingInputItem>>({});
   const [snapshots, setSnapshots] = useState<ModelInputSnapshotSummaryItem[]>([]);
   const [shadowRuns, setShadowRuns] = useState<ShadowInferenceRunItem[]>([]);
+  const [preprocessingStatusMap, setPreprocessingStatusMap] = useState<Record<string, ImagingPreprocessingStatusResponse>>({});
 
   const demoValues = useMemo(() => ({
     trace_id: caseRecord?.trace_id || 'trace-demo',
@@ -136,6 +167,26 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
       orientation_ok: true,
     }, null, 2),
   }), [caseId, caseRecord?.trace_id]);
+
+  const dicomDemoValues = useMemo(() => ({
+    series_label: 'DICOM series demo',
+    source_type: 'synthetic',
+    dicom_series_ref: 'managed://coursework-demo/' + caseId + '/dicom-series-01',
+    storage_uri: 'managed://coursework-demo/' + caseId + '/dicom-series-01',
+    provenance_json: JSON.stringify({
+      source_format: 'dicom_series',
+      capture_mode: 'metadata_only',
+      deidentified: true,
+      not_for_diagnosis: true,
+      source_case_link: caseId,
+    }, null, 2),
+    quality_flags_json: JSON.stringify({
+      preprocessed_format: 'nifti_nii_gz',
+      preprocessing_script: 'dcmtonii_N4.py',
+      conversion_tool: 'dcm2niix',
+      bias_correction: 'N4BiasFieldCorrection',
+    }, null, 2),
+  }), [caseId]);
 
   async function loadPageState() {
     setLoading(true);
@@ -189,11 +240,22 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
         const imagingItems = imagingResult.status === 'fulfilled' ? imagingResult.value.items || [] : [];
         const snapshotItems = snapshotResult.status === 'fulfilled' ? snapshotResult.value.items || [] : [];
         const shadowItems = shadowResult.status === 'fulfilled' ? shadowResult.value.items || [] : [];
+        const preprocessingEntries = await Promise.allSettled(
+          imagingItems.map(async (item) => [item.input_asset_id, await getImagingPreprocessingStatus(item.input_asset_id)] as const),
+        );
+        const preprocessingMap: Record<string, ImagingPreprocessingStatusResponse> = {};
+        preprocessingEntries.forEach((entry) => {
+          if (entry.status === 'fulfilled') {
+            const [assetId, status] = entry.value;
+            preprocessingMap[assetId] = status;
+          }
+        });
 
         setCaseRecord(caseItem);
         setItems(imagingItems);
         setSnapshots(snapshotItems);
         setShadowRuns(shadowItems);
+        setPreprocessingStatusMap(preprocessingMap);
 
         if (imagingItems.length > 0) {
           setDetails((current) => ({ ...current, ...Object.fromEntries(imagingItems.map((item) => [item.input_asset_id, item])) }));
@@ -262,13 +324,75 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
     setMessage('已填入课程演示样例，仅用于元数据登记，不代表真实临床影像。');
   }
 
+  async function handleDicomDemoFill() {
+    dicomForm.setFieldsValue(dicomDemoValues);
+    setMessageType('info');
+    setMessage('已填入 DICOM contract 演示样例，仅用于 metadata-only 登记，不会读取真实 DICOM。');
+  }
+
+  async function handleDicomSubmit(values: DicomSeriesFormValues) {
+    const provenanceJson = safeParseJson(values.provenance_json);
+    if (provenanceJson === null) {
+      setMessageType('error');
+      setMessage('provenance_json 不是合法 JSON，请先修正后再保存。');
+      return;
+    }
+
+    const qualityFlagsJson = safeParseJson(values.quality_flags_json);
+    if (qualityFlagsJson === null) {
+      setMessageType('error');
+      setMessage('quality_flags_json 不是合法 JSON，请先修正后再保存。');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const item = await registerDicomSeries(caseId, {
+        series_label: values.series_label || 'DICOM series',
+        source_type: values.source_type || 'demo',
+        dicom_series_ref: values.dicom_series_ref || values.storage_uri || '',
+        storage_uri: values.storage_uri || values.dicom_series_ref || '',
+        deidentified: true,
+        not_for_diagnosis: true,
+        provenance_json: provenanceJson,
+        quality_flags_json: qualityFlagsJson,
+      } as DicomSeriesRegisterPayload);
+      setDetails((current) => ({ ...current, [item.input_asset_id]: item }));
+      setMessageType('success');
+      setMessage('DICOM series 元数据已登记：' + item.input_asset_id + '。仅为 contract placeholder，不读取真实 DICOM。');
+      dicomForm.resetFields();
+      await loadPageState();
+    } catch (error) {
+      setMessageType('error');
+      setMessage('DICOM series 登记失败：' + (error instanceof Error ? error.message : '请稍后重试'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleExpand(expanded: boolean, record: CaseImagingInputItem) {
     if (!expanded || details[record.input_asset_id]) return;
     try {
       const detail = await getCaseImagingInput(record.input_asset_id);
       setDetails((current) => ({ ...current, [record.input_asset_id]: detail }));
+      void getImagingPreprocessingStatus(record.input_asset_id).then((status) => {
+        setPreprocessingStatusMap((current) => ({ ...current, [record.input_asset_id]: status }));
+      }).catch(() => undefined);
     } catch {
       setDetails((current) => ({ ...current, [record.input_asset_id]: record }));
+    }
+  }
+
+  async function handleRequestPreprocess(inputAssetId: string) {
+    setMessage('');
+    try {
+      const result = await requestImagingPreprocess(inputAssetId);
+      setPreprocessingStatusMap((current) => ({ ...current, [inputAssetId]: result }));
+      setMessageType(result.preprocessing_status === 'not_implemented' || result.error_code === 'preprocessing_not_implemented' ? 'warning' : 'success');
+      setMessage('预处理请求已提交：' + inputAssetId + '。当前仅返回 contract placeholder，不运行 dcm2niix / N4。');
+    } catch (error) {
+      setMessageType('error');
+      setMessage('请求预处理失败：' + (error instanceof Error ? error.message : '请稍后重试'));
     }
   }
 
@@ -310,6 +434,62 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
           <Descriptions.Item label='病种任务'>{caseRecord?.disease_task || '-'}</Descriptions.Item>
           <Descriptions.Item label='当前状态'>{caseRecord?.status || '-'}</Descriptions.Item>
         </Descriptions>
+      </Card>
+
+      <Card
+        size='small'
+        title='DICOM preprocessing contract'
+        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
+        extra={<Space wrap size={8}><Button onClick={handleDicomDemoFill}>填充 DICOM contract 样例</Button><Button type='primary' onClick={() => dicomForm.submit()}>登记 DICOM series</Button></Space>}
+      >
+        <Alert
+          type='warning'
+          showIcon
+          message='这里只登记 DICOM series metadata，不上传真实 DICOM'
+          description='DICOM 不能直接进入 CAP/COP 影像模型；必须先经过 dcm2niix -> raw_image.nii.gz，再经 N4BiasFieldCorrection -> image.nii.gz。label.nii.gz 仅作训练/评估标注引用，不进入推理。当前请求预处理只会返回 preprocessing_not_implemented。'
+        />
+        <Form form={dicomForm} layout='vertical' onFinish={handleDicomSubmit} initialValues={dicomDemoValues} style={{ marginTop: 12 }}>
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item label='series_label' name='series_label' rules={[{ required: true, message: '请输入 series_label' }]}>
+                <Input placeholder='例如：CAP/COP DICOM series demo' />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item label='source_type' name='source_type' rules={[{ required: true, message: '请选择 source_type' }]}>
+                <Select options={[{ label: 'synthetic', value: 'synthetic' }, { label: 'demo', value: 'demo' }, { label: 'real_deidentified', value: 'real_deidentified' }]} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item label='dicom_series_ref' name='dicom_series_ref' rules={[{ required: true, message: '请输入 dicom_series_ref' }]}>
+                <Input placeholder='例如：managed://coursework-demo/case-001/dicom-series-01' />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item label='storage_uri / 引用位置' name='storage_uri' rules={[{ required: true, message: '请输入 storage_uri' }]}>
+            <Input placeholder='例如：managed://coursework-demo/case-001/dicom-series-01' />
+          </Form.Item>
+          <Space wrap size={16} style={{ marginBottom: 16 }}>
+            <Checkbox checked disabled>deidentified = true</Checkbox>
+            <Checkbox checked disabled>not_for_diagnosis = true</Checkbox>
+          </Space>
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label='provenance_json' name='provenance_json' extra='仅记录来源和引用，不读取真实 DICOM 文件。'>
+                <Input.TextArea rows={8} spellCheck={false} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label='quality_flags_json' name='quality_flags_json' extra='用于说明课程演示质量标记，不影响诊断。'>
+                <Input.TextArea rows={8} spellCheck={false} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Space wrap size={8}>
+            <Button type='primary' htmlType='submit' loading={saving}>登记 DICOM series</Button>
+            <Typography.Text type='secondary'>保存后不会自动预处理，也不会运行 dcm2niix / N4。</Typography.Text>
+          </Space>
+        </Form>
       </Card>
 
       <Card
@@ -394,7 +574,7 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
       >
         <Space direction='vertical' size={8} style={{ width: '100%' }}>
           <Typography.Text type='secondary'>
-            当前仅展示 metadata / reference summary。点击行左侧展开可看 provenance 和 quality flags。
+            当前仅展示 metadata / reference summary。点击行左侧展开可看 provenance、quality flags 和 DICOM preprocessing contract。
           </Typography.Text>
           <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
             <Table
@@ -408,16 +588,33 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
                   const detail = details[record.input_asset_id] || record;
                   return (
                     <div style={{ margin: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden', padding: 12, border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa' }}>
-                      <Row gutter={16}>
-                        <Col xs={24} md={12}>
-                          <Typography.Title level={5} style={{ marginTop: 0 }}>provenance_json</Typography.Title>
-                          {renderJsonBlock(detail.provenance_json)}
-                        </Col>
-                        <Col xs={24} md={12}>
-                          <Typography.Title level={5} style={{ marginTop: 0 }}>quality_flags_json</Typography.Title>
-                          {renderJsonBlock(detail.quality_flags_json)}
-                        </Col>
-                      </Row>
+                      <Space direction='vertical' size={12} style={{ width: '100%' }}>
+                        <Descriptions bordered size='small' column={2}>
+                          <Descriptions.Item label='source_format'>{preprocessingStatusMap[record.input_asset_id]?.source_format || 'dicom_series'}</Descriptions.Item>
+                          <Descriptions.Item label='preprocessed_format'>{preprocessingStatusMap[record.input_asset_id]?.preprocessed_format || 'nifti_nii_gz'}</Descriptions.Item>
+                          <Descriptions.Item label='preprocessing_script'>{preprocessingStatusMap[record.input_asset_id]?.preprocessing_script || 'dcmtonii_N4.py'}</Descriptions.Item>
+                          <Descriptions.Item label='conversion_tool'>{preprocessingStatusMap[record.input_asset_id]?.conversion_tool || 'dcm2niix'}</Descriptions.Item>
+                          <Descriptions.Item label='bias_correction'>{preprocessingStatusMap[record.input_asset_id]?.bias_correction || 'N4BiasFieldCorrection'}</Descriptions.Item>
+                          <Descriptions.Item label='preprocessing_status'>{getPreprocessingStatusLabel(preprocessingStatusMap[record.input_asset_id]?.preprocessing_status || 'pending')}</Descriptions.Item>
+                          <Descriptions.Item label='raw_output_file'>{preprocessingStatusMap[record.input_asset_id]?.raw_output_file || 'raw_image.nii.gz'}</Descriptions.Item>
+                          <Descriptions.Item label='model_input_file'>{preprocessingStatusMap[record.input_asset_id]?.model_input_file || 'image.nii.gz'}</Descriptions.Item>
+                          <Descriptions.Item label='label_file'>{preprocessingStatusMap[record.input_asset_id]?.label_file || 'label.nii.gz'}</Descriptions.Item>
+                        </Descriptions>
+                        <Space wrap size={8}>
+                          <Button onClick={() => void handleRequestPreprocess(record.input_asset_id)}>请求预处理</Button>
+                          <Typography.Text type='secondary'>当前只是 contract placeholder，不会真的运行 dcm2niix 或 N4。</Typography.Text>
+                        </Space>
+                        <Row gutter={16}>
+                          <Col xs={24} md={12}>
+                            <Typography.Title level={5} style={{ marginTop: 0 }}>provenance_json</Typography.Title>
+                            {renderJsonBlock(detail.provenance_json)}
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <Typography.Title level={5} style={{ marginTop: 0 }}>quality_flags_json</Typography.Title>
+                            {renderJsonBlock(detail.quality_flags_json)}
+                          </Col>
+                        </Row>
+                      </Space>
                     </div>
                   );
                 },
@@ -440,6 +637,10 @@ export default function Page({ params }: { params: Promise<{ caseId: string }> }
                 { title: '非诊断', dataIndex: 'not_for_diagnosis', width: 90, render: (value: boolean) => <Tag color={value ? 'green' : 'red'}>{value ? 'true' : 'false'}</Tag> },
                 { title: 'Trace / 溯源', dataIndex: 'trace_id', width: 220, render: (value: string) => value || '-' },
                 { title: '创建时间', dataIndex: 'created_at', width: 180, render: (value: string) => value || '-' },
+                { title: '预处理状态', dataIndex: 'input_asset_id', width: 140, render: (_: string, record: CaseImagingInputItem) => {
+                  const status = preprocessingStatusMap[record.input_asset_id]?.preprocessing_status;
+                  return <Tag color={status === 'completed' ? 'green' : status === 'failed' ? 'red' : status === 'not_implemented' ? 'orange' : 'blue'}>{getPreprocessingStatusLabel(status || 'pending')}</Tag>;
+                } },
               ]}
             />
           </div>
