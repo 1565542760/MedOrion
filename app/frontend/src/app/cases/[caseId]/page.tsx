@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { use, useEffect, useMemo, useState } from 'react';
-import { Alert, Card, Descriptions, Space, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Descriptions, Space, Tabs, Tag, Typography } from 'antd';
 import {
   getImagingPreprocessingStatus,
   getShadowRunOutputs,
@@ -424,6 +424,30 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
     };
   }, [caseId, clinicalReadiness.gap, clinicalReadiness.state, imagingReadiness.gap, imagingReadiness.state]);
 
+
+  const workflowAnyReady = clinicalReadiness.state === '可运行' || imagingReadiness.state === '可运行' || multimodalReadiness.state === '可运行';
+  const workflowFullyReady = clinicalReadiness.state === '可运行' && imagingReadiness.state === '可运行' && multimodalReadiness.state === '可运行';
+  const workflowGateLabel = workflowFullyReady
+    ? '工作流门禁预览：全部分支可运行'
+    : workflowAnyReady
+      ? '工作流门禁预览：部分分支可运行'
+      : '暂不可运行 CAP/COP shadow workflow';
+  const workflowGateMessage = workflowFullyReady
+    ? '执行入口待后端编排阶段开放。当前仅展示只读 readiness skeleton。'
+    : workflowAnyReady
+      ? '当前至少有部分分支满足输入条件，但本阶段仍不开放真实执行入口。'
+      : '当前门禁未通过，先补齐下方缺口。';
+  const workflowGateBlockers = Array.from(new Set([
+    clinicalReadiness.state !== '可运行' ? clinicalReadiness.gap : '',
+    imagingReadiness.state !== '可运行' ? imagingReadiness.gap : '',
+    multimodalReadiness.state !== '可运行' ? multimodalReadiness.gap : '',
+  ].filter(Boolean)));
+  const workflowBranches = [
+    { title: 'clinical MLP', readiness: clinicalReadiness, nextHint: '进入临床输入 / 输入快照' },
+    { title: 'imaging ResNet18', readiness: imagingReadiness, nextHint: '进入影像输入 / 预处理契约' },
+    { title: 'multimodal ResNet18', readiness: multimodalReadiness, nextHint: '补齐临床 + 影像后再进入多模态' },
+  ];
+
   return (
     <Space direction='vertical' size={16} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
       <Card size='small' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
@@ -475,6 +499,60 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
                   <Typography.Text><strong>当前缺口：</strong>{item.info.gap}</Typography.Text>
                   <Typography.Text type='secondary'><strong>下一步：</strong>{item.info.note}</Typography.Text>
                   <Link href={item.info.nextHref}>{item.info.nextLabel}</Link>
+                </Space>
+              </div>
+            ))}
+          </div>
+        </Space>
+      </Card>
+
+
+      <Card size='small' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+        <Space direction='vertical' size={12} style={{ width: '100%' }}>
+          <Space wrap size={8}>
+            <Typography.Title level={5} style={{ margin: 0 }}>一键 CAP/COP shadow workflow</Typography.Title>
+            <Tag color={workflowFullyReady ? 'green' : workflowAnyReady ? 'blue' : 'red'}>{workflowGateLabel}</Tag>
+            <Tag color='gold'>Shadow only</Tag>
+            <Tag color='gold'>非诊断</Tag>
+            <Tag color='gold'>非正式推荐</Tag>
+          </Space>
+          <Alert
+            type={workflowFullyReady ? 'info' : 'warning'}
+            showIcon
+            message={workflowFullyReady ? '执行入口待后端编排阶段开放' : '工作流门禁未完全通过'}
+            description={workflowGateMessage}
+          />
+          <Button block disabled size='large'>{workflowFullyReady ? '执行入口待后端编排阶段开放' : '暂不可运行 CAP/COP shadow workflow'}</Button>
+          <Typography.Text type='secondary'>
+            {workflowFullyReady
+              ? '当前三条分支都已具备各自 readiness，但本阶段只做门禁预览。'
+              : '当前只显示 readiness skeleton，不会触发任何 one-shot 或写入。'}
+          </Typography.Text>
+          {workflowGateBlockers.length > 0 ? (
+            <Alert
+              type='warning'
+              showIcon
+              message='禁用原因'
+              description={(
+                <ul style={{ margin: 0, paddingLeft: 20 }}>
+                  {workflowGateBlockers.map((reason) => <li key={reason}>{reason}</li>)}
+                </ul>
+              )}
+            />
+          ) : null}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, width: '100%' }}>
+            {workflowBranches.map((item) => (
+              <div key={item.title} style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff', minWidth: 0 }}>
+                <Space direction='vertical' size={6} style={{ width: '100%' }}>
+                  <Typography.Text type='secondary'>{item.title}</Typography.Text>
+                  <Space wrap size={6}>
+                    <Tag color={item.readiness.stateColor}>{item.readiness.state}</Tag>
+                    <Tag color={item.readiness.state === '可运行' ? 'green' : 'default'}>{item.readiness.state === '可运行' ? '门禁可用' : '门禁禁用'}</Tag>
+                  </Space>
+                  <Typography.Text><strong>输入要求：</strong>{item.readiness.requirement}</Typography.Text>
+                  <Typography.Text><strong>当前缺口：</strong>{item.readiness.gap}</Typography.Text>
+                  <Typography.Text type='secondary'><strong>下一步：</strong>{item.readiness.note}</Typography.Text>
+                  <Link href={item.readiness.nextHref}>{item.nextHint}</Link>
                 </Space>
               </div>
             ))}
