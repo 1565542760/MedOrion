@@ -1,9 +1,8 @@
-
 from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -16,12 +15,31 @@ from app.db.session import SessionLocal
 from app.modules.auth.dependencies import require_roles
 from app.modules.inference.persistence import resolve_case_context
 from app.modules.imaging_inputs.schemas import (
+    DicomSeriesImagingInputCreateRequestV1,
     ImagingInputCreateRequestV1,
     ImagingInputCreateResponseV1,
     ImagingInputDetailResponseV1,
-    ImagingInputListResponseV1,
-    ImagingInputSummaryItemV1,
     ImagingInputItemV1,
+    ImagingInputListResponseV1,
+    ImagingInputPreprocessingStatusItemV1,
+    ImagingInputPreprocessingStatusResponseV1,
+    ImagingInputSummaryItemV1,
+    ImagingPreprocessResponseV1,
+)
+from app.modules.shadow_audit.imaging_contract import (
+    IMAGING_BIAS_CORRECTION,
+    IMAGING_CONVERSION_TOOL,
+    IMAGING_LABEL_FILE,
+    IMAGING_MODEL_INPUT_FILE,
+    IMAGING_PREPROCESSING_SCRIPT,
+    IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED,
+    IMAGING_PREPROCESSING_STATUS_PENDING,
+    IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
+    IMAGING_RAW_OUTPUT_FILE,
+    IMAGING_SOURCE_FORMAT_DICOM_SERIES,
+    imaging_preprocessing_metadata,
+    imaging_preprocessing_state,
+    require_preprocessed_imaging_reference,
 )
 
 router = APIRouter()
@@ -62,6 +80,65 @@ def _normalize_text(value: str | None) -> str:
     return (value or '').strip()
 
 
+def _contract_payload(
+    *,
+    source_format: str,
+    preprocessed_format: str,
+    preprocessing_script: str,
+    conversion_tool: str,
+    bias_correction: str,
+    raw_output_file: str,
+    model_input_file: str,
+    label_file: str,
+    preprocessing_status: str,
+) -> dict[str, Any]:
+    return {
+        'source_format': source_format,
+        'preprocessed_format': preprocessed_format,
+        'preprocessing_script': preprocessing_script,
+        'conversion_tool': conversion_tool,
+        'bias_correction': bias_correction,
+        'raw_output_file': raw_output_file,
+        'model_input_file': model_input_file,
+        'label_file': label_file,
+        'preprocessing_status': preprocessing_status,
+    }
+
+
+def _register_imaging_row(
+    db: Session,
+    *,
+    case_id: UUID,
+    patient_id: UUID,
+    trace_id: str,
+    modality: str,
+    source_type: str,
+    storage_uri: str,
+    provenance_json: dict[str, Any],
+    quality_flags_json: dict[str, Any],
+    deidentified: bool = True,
+    not_for_diagnosis: bool = True,
+) -> CaseImagingInput:
+    input_asset_id = f'img_{uuid4().hex}'
+    row = CaseImagingInput(
+        input_asset_id=input_asset_id,
+        case_id=case_id,
+        patient_id=patient_id,
+        trace_id=_normalize_text(trace_id),
+        modality=modality,
+        source_type=source_type,
+        storage_uri=_normalize_text(storage_uri),
+        deidentified=deidentified,
+        not_for_diagnosis=not_for_diagnosis,
+        provenance_json=dict(provenance_json or {}),
+        quality_flags_json=dict(quality_flags_json or {}),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def _summary_item(row: CaseImagingInput) -> ImagingInputSummaryItemV1:
     return ImagingInputSummaryItemV1(
         id=row.id,
@@ -97,6 +174,35 @@ def _detail_item(row: CaseImagingInput) -> ImagingInputItemV1:
     )
 
 
+def _status_item(row: CaseImagingInput) -> ImagingInputPreprocessingStatusItemV1:
+    state = imaging_preprocessing_state(row)
+    return ImagingInputPreprocessingStatusItemV1(
+        id=row.id,
+        input_asset_id=row.input_asset_id,
+        case_id=row.case_id,
+        patient_id=row.patient_id,
+        trace_id=row.trace_id,
+        modality=row.modality,
+        source_type=row.source_type,
+        storage_uri=row.storage_uri,
+        deidentified=row.deidentified,
+        not_for_diagnosis=row.not_for_diagnosis,
+        source_format=state['source_format'],
+        preprocessed_format=state['preprocessed_format'],
+        preprocessing_script=state['preprocessing_script'],
+        conversion_tool=state['conversion_tool'],
+        bias_correction=state['bias_correction'],
+        raw_output_file=state['raw_output_file'],
+        model_input_file=state['model_input_file'],
+        label_file=state['label_file'],
+        preprocessing_status=state['preprocessing_status'],
+        provenance_json=dict(row.provenance_json or {}),
+        quality_flags_json=dict(row.quality_flags_json or {}),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
 @router.post('/cases/{case_id}/imaging-inputs', response_model=ImagingInputCreateResponseV1)
 def create_imaging_input(
     case_id: str,
@@ -113,27 +219,83 @@ def create_imaging_input(
 
     require_case_access(db, user, str(resolved_case_id), access_level='detail')
 
-    input_asset_id = f'img_{uuid4().hex}'
-    row = CaseImagingInput(
-        input_asset_id=input_asset_id,
+    row = _register_imaging_row(
+        db,
         case_id=resolved_case_id,
         patient_id=resolved_patient_id,
-        trace_id=_normalize_text(payload.trace_id),
+        trace_id=payload.trace_id,
         modality=payload.modality,
         source_type=payload.source_type,
-        storage_uri=_normalize_text(payload.storage_uri),
+        storage_uri=payload.storage_uri,
+        provenance_json=payload.provenance_json,
+        quality_flags_json=payload.quality_flags_json,
         deidentified=True,
         not_for_diagnosis=True,
-        provenance_json=dict(payload.provenance_json or {}),
-        quality_flags_json=dict(payload.quality_flags_json or {}),
     )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
     return ImagingInputCreateResponseV1(
         status='created',
         route='/cases/{case_id}/imaging-inputs',
         item=_detail_item(row),
+    )
+
+
+@router.post('/cases/{case_id}/imaging-inputs/dicom-series', response_model=ImagingInputPreprocessingStatusResponseV1)
+def register_dicom_series_imaging_input(
+    case_id: str,
+    payload: DicomSeriesImagingInputCreateRequestV1,
+    db: Session = Depends(get_db),
+    user=Depends(imaging_input_write_guard),
+) -> ImagingInputPreprocessingStatusResponseV1:
+    resolved_case_id, resolved_patient_id = _resolve_case_context_or_404(db, case_id)
+    if payload.patient_id != resolved_patient_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={'code': 'patient_mismatch', 'message': 'Patient does not match the case'},
+        )
+
+    require_case_access(db, user, str(resolved_case_id), access_level='detail')
+
+    provenance = {
+        'source_format': IMAGING_SOURCE_FORMAT_DICOM_SERIES,
+        'preprocessed_format': IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
+        'preprocessing_script': payload.preprocessing_script or IMAGING_PREPROCESSING_SCRIPT,
+        'conversion_tool': payload.conversion_tool or IMAGING_CONVERSION_TOOL,
+        'bias_correction': payload.bias_correction or IMAGING_BIAS_CORRECTION,
+        'raw_output_file': payload.raw_output_file or IMAGING_RAW_OUTPUT_FILE,
+        'model_input_file': payload.model_input_file or 'image.nii.gz',
+        'label_file': payload.label_file or 'label.nii.gz',
+        'preprocessing_status': IMAGING_PREPROCESSING_STATUS_PENDING,
+        **dict(payload.provenance_json or {}),
+    }
+    quality_flags = {
+        'source_format': IMAGING_SOURCE_FORMAT_DICOM_SERIES,
+        'preprocessed_format': IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
+        'preprocessing_script': payload.preprocessing_script or IMAGING_PREPROCESSING_SCRIPT,
+        'conversion_tool': payload.conversion_tool or IMAGING_CONVERSION_TOOL,
+        'bias_correction': payload.bias_correction or IMAGING_BIAS_CORRECTION,
+        'raw_output_file': payload.raw_output_file or IMAGING_RAW_OUTPUT_FILE,
+        'model_input_file': payload.model_input_file or 'image.nii.gz',
+        'label_file': payload.label_file or 'label.nii.gz',
+        'preprocessing_status': IMAGING_PREPROCESSING_STATUS_PENDING,
+        **dict(payload.quality_flags_json or {}),
+    }
+    row = _register_imaging_row(
+        db,
+        case_id=resolved_case_id,
+        patient_id=resolved_patient_id,
+        trace_id=payload.trace_id,
+        modality=payload.modality,
+        source_type=payload.source_type,
+        storage_uri=payload.storage_uri,
+        provenance_json=provenance,
+        quality_flags_json=quality_flags,
+        deidentified=True,
+        not_for_diagnosis=True,
+    )
+    return ImagingInputPreprocessingStatusResponseV1(
+        status='ok',
+        route='/cases/{case_id}/imaging-inputs/dicom-series',
+        item=_status_item(row),
     )
 
 
@@ -182,4 +344,57 @@ def get_imaging_input(
         status='ok',
         route='/imaging-inputs/{input_asset_id}',
         item=_detail_item(row),
+    )
+
+
+@router.get('/imaging-inputs/{input_asset_id}/preprocessing-status', response_model=ImagingInputPreprocessingStatusResponseV1)
+def get_imaging_input_preprocessing_status(
+    input_asset_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(imaging_input_read_guard),
+) -> ImagingInputPreprocessingStatusResponseV1:
+    row = db.execute(
+        select(CaseImagingInput).where(CaseImagingInput.input_asset_id == input_asset_id)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={'code': 'imaging_input_not_found', 'message': 'Imaging input not found'},
+        )
+    require_case_access(db, user, str(row.case_id), access_level='detail')
+    return ImagingInputPreprocessingStatusResponseV1(
+        status='ok',
+        route='/imaging-inputs/{input_asset_id}/preprocessing-status',
+        item=_status_item(row),
+    )
+
+
+@router.post('/imaging-inputs/{input_asset_id}/preprocess', response_model=ImagingPreprocessResponseV1)
+def preprocess_imaging_input(
+    input_asset_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(imaging_input_write_guard),
+) -> ImagingPreprocessResponseV1:
+    row = db.execute(
+        select(CaseImagingInput).where(CaseImagingInput.input_asset_id == input_asset_id)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={'code': 'imaging_input_not_found', 'message': 'Imaging input not found'},
+        )
+    require_case_access(db, user, str(row.case_id), access_level='detail')
+    status_item = _status_item(row)
+    return ImagingPreprocessResponseV1(
+        status=IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED,
+        route='/imaging-inputs/{input_asset_id}/preprocess',
+        message='DICOM preprocessing is registered as a contract but not executed in this coursework stage',
+        item=status_item,
+        limitations=[
+            'not_for_diagnosis',
+            'shadow_only',
+            'not_formal_recommendation',
+            'no_dicom_read',
+            'preprocessing_contract_ready',
+        ],
     )

@@ -10,9 +10,14 @@ IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ = "nifti_nii_gz"
 IMAGING_PREPROCESSING_SCRIPT = "dcmtonii_N4.py"
 IMAGING_CONVERSION_TOOL = "dcm2niix"
 IMAGING_BIAS_CORRECTION = "N4BiasFieldCorrection"
+IMAGING_RAW_OUTPUT_FILE = "raw_image.nii.gz"
 IMAGING_MODEL_INPUT_FILE = "image.nii.gz"
 IMAGING_LABEL_FILE = "label.nii.gz"
 IMAGING_REAL_SHADOW_ALLOWED_SOURCE_TYPES = {"synthetic"}
+IMAGING_PREPROCESSING_STATUS_PENDING = "pending"
+IMAGING_PREPROCESSING_STATUS_COMPLETED = "completed"
+IMAGING_PREPROCESSING_STATUS_FAILED = "failed"
+IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED = "not_implemented"
 
 
 def _normalize_text(value: Any) -> str:
@@ -58,6 +63,7 @@ def extract_imaging_input_contract(input_row: Any) -> dict[str, Any]:
     preprocessing_script = _normalize_text(provenance.get("preprocessing_script") or quality_flags.get("preprocessing_script"))
     conversion_tool = _normalize_text(provenance.get("conversion_tool") or quality_flags.get("conversion_tool"))
     bias_correction = _normalize_text(provenance.get("bias_correction") or quality_flags.get("bias_correction"))
+    raw_output_file = _normalize_text(provenance.get("raw_output_file") or quality_flags.get("raw_output_file")) or IMAGING_RAW_OUTPUT_FILE
     model_input_file = _normalize_text(provenance.get("model_input_file") or quality_flags.get("model_input_file")) or IMAGING_MODEL_INPUT_FILE
     label_file = _normalize_text(provenance.get("label_file") or quality_flags.get("label_file")) or IMAGING_LABEL_FILE
     return {
@@ -70,6 +76,7 @@ def extract_imaging_input_contract(input_row: Any) -> dict[str, Any]:
         "preprocessing_script": preprocessing_script,
         "conversion_tool": conversion_tool,
         "bias_correction": bias_correction,
+        "raw_output_file": raw_output_file,
         "model_input_file": model_input_file,
         "label_file": label_file,
     }
@@ -135,6 +142,31 @@ def imaging_preprocessing_metadata(input_row: Any) -> dict[str, Any]:
         "preprocessing_script": contract["preprocessing_script"] or IMAGING_PREPROCESSING_SCRIPT,
         "conversion_tool": contract["conversion_tool"] or IMAGING_CONVERSION_TOOL,
         "bias_correction": contract["bias_correction"] or IMAGING_BIAS_CORRECTION,
+        "raw_output_file": contract["raw_output_file"] or IMAGING_RAW_OUTPUT_FILE,
         "model_input_file": contract["model_input_file"],
         "label_file": contract["label_file"],
+    }
+
+
+def imaging_preprocessing_state(input_row: Any) -> dict[str, Any]:
+    contract = imaging_preprocessing_metadata(input_row)
+    source_format = contract["source_format"]
+    preprocessed_format = contract["preprocessed_format"]
+    storage_uri = _normalize_text(getattr(input_row, "storage_uri", None))
+    source_type = _normalize_text(getattr(input_row, "source_type", None)).lower()
+    if source_format == IMAGING_SOURCE_FORMAT_DICOM_SERIES or _looks_like_dicom_directory(storage_uri):
+        preprocessing_status = IMAGING_PREPROCESSING_STATUS_PENDING
+    elif preprocessed_format == IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ and (
+        _looks_like_nifti_reference(storage_uri) or source_type == "synthetic"
+    ):
+        preprocessing_status = IMAGING_PREPROCESSING_STATUS_COMPLETED
+    elif preprocessed_format:
+        preprocessing_status = IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED
+    else:
+        preprocessing_status = IMAGING_PREPROCESSING_STATUS_PENDING
+    return {
+        **contract,
+        "preprocessing_status": preprocessing_status,
+        "storage_uri": storage_uri,
+        "source_type": source_type,
     }
