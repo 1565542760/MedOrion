@@ -4,13 +4,17 @@ import Link from 'next/link';
 import { use, useEffect, useMemo, useState } from 'react';
 import { Alert, Card, Descriptions, Space, Tabs, Tag, Typography } from 'antd';
 import {
+  getImagingPreprocessingStatus,
   getShadowRunOutputs,
   listCaseImagingInputs,
   listCases,
   listModelInputSnapshotsByCase,
   listPatients,
   listShadowRunsByCase,
+  type CaseImagingInputItem,
   type CaseItem,
+  type ModelInputSnapshotSummaryItem,
+  type ImagingPreprocessingStatusResponse,
   type PatientItem,
   type ShadowInferenceRunItem,
   type ShadowInferenceRunOutputItem,
@@ -26,6 +30,18 @@ type CaseContext = {
   latestImagingRun: ShadowInferenceRunItem | null;
   latestImagingOutput: ShadowInferenceRunOutputItem | null;
   loadingError: string;
+};
+
+type ReadinessState = '可运行' | '不可运行' | '仅原型' | 'schema 未验证' | '需要预处理';
+
+type ReadinessView = {
+  state: ReadinessState;
+  stateColor: string;
+  requirement: string;
+  gap: string;
+  nextLabel: string;
+  nextHref: string;
+  note: string;
 };
 
 function pickPatientDisplayName(patient: PatientItem | undefined) {
@@ -152,6 +168,9 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
     loadingError: '',
   });
   const [loading, setLoading] = useState(true);
+  const [snapshotRows, setSnapshotRows] = useState<ModelInputSnapshotSummaryItem[]>([]);
+  const [imagingItems, setImagingItems] = useState<CaseImagingInputItem[]>([]);
+  const [preprocessingStatusMap, setPreprocessingStatusMap] = useState<Record<string, ImagingPreprocessingStatusResponse>>({});
 
   const latestShadowRunId = context.latestShadowRun?.shadow_run_id || '';
   const latestShadowCandidate = context.latestShadowOutput?.candidate_label || '';
@@ -182,6 +201,16 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
         const snapshots = snapshotResult.status === 'fulfilled' ? snapshotResult.value.items || [] : [];
         const imagingInputs = imagingResult.status === 'fulfilled' ? imagingResult.value.items || [] : [];
         const shadowRuns = shadowResult.status === 'fulfilled' ? shadowResult.value.items || [] : [];
+        const preprocessingEntries = await Promise.allSettled(
+          imagingInputs.map(async (item) => [item.input_asset_id, await getImagingPreprocessingStatus(item.input_asset_id)] as const),
+        );
+        const preprocessingMap: Record<string, ImagingPreprocessingStatusResponse> = {};
+        preprocessingEntries.forEach((entry) => {
+          if (entry.status === 'fulfilled') {
+            const [assetId, status] = entry.value;
+            preprocessingMap[assetId] = status;
+          }
+        });
         const latestShadowRun = [...shadowRuns].sort(
           (a, b) => new Date(b.started_at || b.created_at || 0).getTime() - new Date(a.started_at || a.created_at || 0).getTime(),
         )[0] || null;
@@ -195,6 +224,9 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
           ? (await getShadowRunOutputs(latestImagingRun.shadow_run_id).catch(() => ({ items: [] as ShadowInferenceRunOutputItem[], total: 0 }))).items?.[0] || null
           : null;
 
+        setPreprocessingStatusMap(preprocessingMap);
+        setSnapshotRows(snapshots);
+        setImagingItems(imagingInputs);
         setContext({
           caseItem,
           patientDisplayName: caseItem ? (patientMap.get(caseItem.patient_id) || '-') : '-',
@@ -268,6 +300,130 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
     },
   ];
 
+  const clinicalReadiness = useMemo<ReadinessView>(() => {
+    const readySnapshot = snapshotRows.find((item) => item.validation_status === 'ready_for_inference' && !item.insufficient_data_for_assessment);
+    if (readySnapshot) {
+      return {
+        state: '可运行',
+        stateColor: 'green',
+        requirement: '需要 36-feature artifact-order snapshot',
+        gap: '已具备 ready_for_inference 的临床输入快照。',
+        nextLabel: '进入临床输入',
+        nextHref: '/cases/' + caseId + '/model-input',
+        note: 'clinical MLP 只在 Shadow only 下可继续。',
+      };
+    }
+    if (snapshotRows.length > 0) {
+      return {
+        state: 'schema 未验证',
+        stateColor: 'orange',
+        requirement: '需要 36-feature artifact-order snapshot',
+        gap: snapshotRows.some((item) => item.insufficient_data_for_assessment || item.validation_status === 'insufficient_data_for_assessment')
+          ? '临床输入契约未完全验证，当前数据不足以判断。'
+          : '临床输入契约未完全验证，尚未形成可用于 Shadow 的快照。',
+        nextLabel: '进入临床输入',
+        nextHref: '/cases/' + caseId + '/model-input',
+        note: '缺失字段不能 silent fallback。',
+      };
+    }
+    return {
+      state: '不可运行',
+      stateColor: 'default',
+      requirement: '需要 36-feature artifact-order snapshot',
+      gap: '当前还没有临床输入快照。',
+      nextLabel: '进入临床输入',
+      nextHref: '/cases/' + caseId + '/model-input',
+      note: '先完成表格输入契约，再考虑 Shadow。',
+    };
+  }, [caseId, snapshotRows]);
+
+  const imagingReadiness = useMemo<ReadinessView>(() => {
+    const dicomOnly = imagingItems.some((item) => item.modality === 'dicom_series' || item.source_type === 'dicom_series');
+    const preprocessedReady = imagingItems.some((item) => item.modality === 'NIfTI' || item.modality === 'nifti_nii_gz' || item.source_type === 'synthetic' || item.source_type === 'demo' || preprocessingStatusMap[item.input_asset_id]?.preprocessing_status === 'completed' || preprocessingStatusMap[item.input_asset_id]?.preprocessed_format === 'nifti_nii_gz');
+    if (context.latestImagingRun && context.latestImagingRun.status === 'shadow_success' && context.latestImagingOutput) {
+      return {
+        state: '可运行',
+        stateColor: 'green',
+        requirement: '需要预处理后的 image.nii.gz',
+        gap: '已有受控影像 shadow 结果，可继续复核。',
+        nextLabel: '进入影像输入',
+        nextHref: '/cases/' + caseId + '/imaging-inputs',
+        note: '仍然是 synthetic-only / coursework_mvp / not_for_diagnosis。',
+      };
+    }
+    if (preprocessedReady) {
+      return {
+        state: '可运行',
+        stateColor: 'green',
+        requirement: '需要预处理后的 image.nii.gz',
+        gap: '已有可用于 shadow 的影像输入（含预处理 NIfTI 或 synthetic 演示输入）。',
+        nextLabel: '进入影像输入',
+        nextHref: '/cases/' + caseId + '/imaging-inputs',
+        note: '影像侧已具备课程 shadow 条件。',
+      };
+    }
+    if (dicomOnly) {
+      return {
+        state: '需要预处理',
+        stateColor: 'orange',
+        requirement: '需要预处理后的 image.nii.gz',
+        gap: '当前只有 DICOM series 引用，需先完成 DICOM -> NIfTI + N4 预处理。',
+        nextLabel: '进入影像输入',
+        nextHref: '/cases/' + caseId + '/imaging-inputs',
+        note: 'raw DICOM 不能直接进影像模型。',
+      };
+    }
+    if (imagingItems.length > 0) {
+      return {
+        state: '仅原型',
+        stateColor: 'blue',
+        requirement: '需要预处理后的 image.nii.gz',
+        gap: '已登记影像 metadata / reference，但还没有可用于 shadow 的影像输入。',
+        nextLabel: '进入影像输入',
+        nextHref: '/cases/' + caseId + '/imaging-inputs',
+        note: '先把影像输入补成可用 NIfTI。',
+      };
+    }
+    return {
+      state: '不可运行',
+      stateColor: 'default',
+      requirement: '需要预处理后的 image.nii.gz',
+      gap: '当前还没有影像输入登记。',
+      nextLabel: '进入影像输入',
+      nextHref: '/cases/' + caseId + '/imaging-inputs',
+      note: '先登记影像输入 / 引用。',
+    };
+  }, [caseId, context.latestImagingOutput, context.latestImagingRun, imagingItems, preprocessingStatusMap]);
+
+  const multimodalReadiness = useMemo<ReadinessView>(() => {
+    const ready = clinicalReadiness.state === '可运行' && imagingReadiness.state === '可运行';
+    if (ready) {
+      return {
+        state: '可运行',
+        stateColor: 'green',
+        requirement: '需要 clinical artifact-order snapshot + preprocessed imaging input',
+        gap: '临床和影像两侧都已满足读取条件。',
+        nextLabel: '进入多模态页面',
+        nextHref: '/cases/' + caseId + '/multimodal',
+        note: '仍然是 Shadow only，不是正式推荐。',
+      };
+    }
+    const gaps = [clinicalReadiness.gap, imagingReadiness.gap].filter(Boolean).join('；');
+    const state: ReadinessState = clinicalReadiness.state === '不可运行' || imagingReadiness.state === '不可运行'
+      ? '不可运行'
+      : (clinicalReadiness.state === 'schema 未验证' || imagingReadiness.state === '需要预处理' ? 'schema 未验证' : '仅原型');
+    const stateColor = state === 'schema 未验证' ? 'orange' : state === '仅原型' ? 'blue' : 'default';
+    return {
+      state,
+      stateColor,
+      requirement: '需要 clinical artifact-order snapshot + preprocessed imaging input',
+      gap: gaps || '临床与影像任一侧缺口未补齐。',
+      nextLabel: '补齐输入数据',
+      nextHref: '/cases/' + caseId + '/model-input',
+      note: '两侧缺口都要补，不能 silent fallback。',
+    };
+  }, [caseId, clinicalReadiness.gap, clinicalReadiness.state, imagingReadiness.gap, imagingReadiness.state]);
+
   return (
     <Space direction='vertical' size={16} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
       <Card size='small' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
@@ -293,6 +449,38 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
 
       {context.loadingError ? <Alert type='error' showIcon message={context.loadingError} /> : null}
       {loadingBanner}
+
+
+      <Card size='small' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+        <Space direction='vertical' size={12} style={{ width: '100%' }}>
+          <Space wrap size={8}>
+            <Typography.Title level={5} style={{ margin: 0 }}>CAP/COP shadow readiness 工作流</Typography.Title>
+            <Tag color='blue'>Shadow only</Tag>
+            <Tag color='gold'>非诊断</Tag>
+            <Tag color='gold'>非正式推荐</Tag>
+          </Space>
+          <Alert
+            type='info'
+            showIcon
+            message='这里只做 readiness，不触发任何模型运行'
+            description='临床 MLP 需要 36-feature artifact-order snapshot；影像 ResNet18 需要预处理后的 image.nii.gz；multimodal ResNet18 需要两侧都具备。'
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, width: '100%' }}>
+            {[{ title: 'clinical MLP', info: clinicalReadiness }, { title: 'imaging ResNet18', info: imagingReadiness }, { title: 'multimodal ResNet18', info: multimodalReadiness }].map((item) => (
+              <div key={item.title} style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff', minWidth: 0 }}>
+                <Space direction='vertical' size={6} style={{ width: '100%' }}>
+                  <Typography.Text type='secondary'>{item.title}</Typography.Text>
+                  <Tag color={item.info.stateColor}>{item.info.state}</Tag>
+                  <Typography.Text><strong>输入要求：</strong>{item.info.requirement}</Typography.Text>
+                  <Typography.Text><strong>当前缺口：</strong>{item.info.gap}</Typography.Text>
+                  <Typography.Text type='secondary'><strong>下一步：</strong>{item.info.note}</Typography.Text>
+                  <Link href={item.info.nextHref}>{item.info.nextLabel}</Link>
+                </Space>
+              </div>
+            ))}
+          </div>
+        </Space>
+      </Card>
 
       <Tabs
         destroyInactiveTabPane={false}
