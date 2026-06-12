@@ -21,6 +21,7 @@ from app.modules.imaging_inputs.schemas import (
     ImagingInputDetailResponseV1,
     ImagingInputItemV1,
     ImagingInputListResponseV1,
+    ImagingPreprocessRequestV1,
     ImagingInputPreprocessingStatusItemV1,
     ImagingInputPreprocessingStatusResponseV1,
     ImagingInputSummaryItemV1,
@@ -32,8 +33,12 @@ from app.modules.shadow_audit.imaging_contract import (
     IMAGING_LABEL_FILE,
     IMAGING_MODEL_INPUT_FILE,
     IMAGING_PREPROCESSING_SCRIPT,
+    IMAGING_PREPROCESSING_EXECUTION_MODE_CONTRACT_CHECK,
+    IMAGING_PREPROCESSING_EXECUTION_MODE_DRY_RUN,
+    IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED,
     IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED,
     IMAGING_PREPROCESSING_STATUS_PENDING,
+    IMAGING_PREPROCESSING_STATUS_READY,
     IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
     IMAGING_RAW_OUTPUT_FILE,
     IMAGING_SOURCE_FORMAT_DICOM_SERIES,
@@ -201,6 +206,41 @@ def _status_item(row: CaseImagingInput) -> ImagingInputPreprocessingStatusItemV1
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+
+def _persist_preprocess_preview(
+    db: Session,
+    row: CaseImagingInput,
+    *,
+    preprocessing_status: str,
+    execution_mode: str,
+    dry_run: bool,
+    candidate_kind: str,
+    expected_steps: list[str],
+) -> CaseImagingInput:
+    provenance = dict(row.provenance_json or {})
+    quality_flags = dict(row.quality_flags_json or {})
+    preview_payload = {
+        'preprocessing_status': preprocessing_status,
+        'preprocessing_execution_mode': execution_mode,
+        'preprocessing_dry_run': dry_run,
+        'preprocessing_will_execute': False,
+        'preprocessing_requested_at': _now().isoformat(),
+        'preprocessing_candidate_kind': candidate_kind,
+        'expected_steps': expected_steps,
+        'expected_raw_output_file': IMAGING_RAW_OUTPUT_FILE,
+        'expected_model_input_file': IMAGING_MODEL_INPUT_FILE,
+        'expected_label_file': IMAGING_LABEL_FILE,
+        'expected_preprocessed_format': IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
+    }
+    provenance.update(preview_payload)
+    quality_flags.update(preview_payload)
+    row.provenance_json = provenance
+    row.quality_flags_json = quality_flags
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.post('/cases/{case_id}/imaging-inputs', response_model=ImagingInputCreateResponseV1)
@@ -372,6 +412,7 @@ def get_imaging_input_preprocessing_status(
 @router.post('/imaging-inputs/{input_asset_id}/preprocess', response_model=ImagingPreprocessResponseV1)
 def preprocess_imaging_input(
     input_asset_id: str,
+    payload: ImagingPreprocessRequestV1,
     db: Session = Depends(get_db),
     user=Depends(imaging_input_write_guard),
 ) -> ImagingPreprocessResponseV1:
@@ -384,17 +425,71 @@ def preprocess_imaging_input(
             detail={'code': 'imaging_input_not_found', 'message': 'Imaging input not found'},
         )
     require_case_access(db, user, str(row.case_id), access_level='detail')
-    status_item = _status_item(row)
-    return ImagingPreprocessResponseV1(
-        status=IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED,
-        route='/imaging-inputs/{input_asset_id}/preprocess',
-        message='DICOM preprocessing is registered as a contract but not executed in this coursework stage',
-        item=status_item,
-        limitations=[
+    if not payload.dry_run:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                'code': 'real_preprocessing_not_enabled',
+                'message': 'This coursework stage only supports dry-run or contract-check preprocessing',
+            },
+        )
+
+    classification = imaging_preprocessing_state(row)
+    if classification['candidate_kind'] == 'unsupported_reference':
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                'code': 'imaging_input_not_dicom_series',
+                'message': 'Preprocess job only accepts DICOM series references or already-preprocessed NIfTI candidates',
+            },
+        )
+
+    if classification['candidate_kind'] == 'already_preprocessed_candidate':
+        final_status = IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED
+        expected_steps: list[str] = []
+        message = 'Input already looks preprocessed; skipping DICOM job and keeping this as a candidate only'
+        limitations = [
+            'not_for_diagnosis',
+            'shadow_only',
+            'not_formal_recommendation',
+            'already_preprocessed_candidate',
+            'no_dicom_job',
+            'will_execute=false',
+        ]
+    else:
+        final_status = IMAGING_PREPROCESSING_STATUS_READY
+        expected_steps = [IMAGING_CONVERSION_TOOL, IMAGING_BIAS_CORRECTION]
+        message = 'Contract check passed; no DICOM preprocessing was executed'
+        limitations = [
             'not_for_diagnosis',
             'shadow_only',
             'not_formal_recommendation',
             'no_dicom_read',
+            'dry_run_only',
+            'will_execute=false',
             'preprocessing_contract_ready',
-        ],
+        ]
+
+    row = _persist_preprocess_preview(
+        db,
+        row,
+        preprocessing_status=final_status,
+        execution_mode=payload.execution_mode,
+        dry_run=payload.dry_run,
+        candidate_kind=classification['candidate_kind'],
+        expected_steps=expected_steps,
+    )
+    status_item = _status_item(row)
+    return ImagingPreprocessResponseV1(
+        status=final_status,
+        route='/imaging-inputs/{input_asset_id}/preprocess',
+        dry_run=payload.dry_run,
+        execution_mode=payload.execution_mode,
+        will_execute=False,
+        candidate_kind=classification['candidate_kind'],
+        error_code=None,
+        message=message,
+        expected_steps=expected_steps,
+        item=status_item,
+        limitations=limitations,
     )

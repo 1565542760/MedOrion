@@ -39,6 +39,12 @@ class DicomSeriesImagingInputCreateRequestV1(BaseModel):
     quality_flags_json: dict[str, Any] = Field(default_factory=dict)
 
 
+class ImagingPreprocessRequestV1(BaseModel):
+    dry_run: bool = True
+    execution_mode: Literal['contract_check', 'dry_run'] = 'contract_check'
+
+
+
 class ImagingInputSummaryItemV1(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -132,7 +138,12 @@ class ImagingInputPreprocessingStatusResponseV1(BaseModel):
 class ImagingPreprocessResponseV1(BaseModel):
     status: str = 'not_implemented'
     route: str
-    error_code: str = 'preprocessing_not_implemented'
-    message: str
+    dry_run: bool = True
+    execution_mode: Literal['contract_check', 'dry_run'] = 'contract_check'
+    will_execute: bool = False
+    candidate_kind: str = 'unknown'
+    error_code: str | None = 'preprocessing_not_implemented'
+    message: str | None = None
+    expected_steps: list[str] = Field(default_factory=list)
     item: ImagingInputPreprocessingStatusItemV1
     limitations: list[str] = Field(default_factory=list)
