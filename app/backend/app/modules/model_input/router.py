@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import lru_cache
+from pathlib import Path
 import json
 import logging
 from typing import Any
@@ -30,6 +32,10 @@ from app.modules.model_input.schemas import (
     ModelInputSnapshotItemV1,
     ModelInputSnapshotListResponseV1,
     ModelInputSnapshotSummaryItemV1,
+    ClinicalTableStrictFeatureMappingItemV1,
+    ClinicalTableStrictTypeCoercionItemV1,
+    ClinicalTableStrictValidationRequestV1,
+    ClinicalTableStrictValidationResponseV1,
     ModelMissingRequiredFeatureItemV1,
     ModelSelectionCandidateItemV1,
     ModelSelectionPreviewRequestV1,
@@ -738,3 +744,301 @@ def list_trace_model_input_snapshots(trace_id: str, limit: int = Query(20, ge=1,
         require_case_access(db, actor, case_uuid, access_level='summary')
     items = [_snapshot_summary_item_from_row(row) for row in rows]
     return _snapshot_list_response(f'/api/v1/traces/{trace_id}/model-input-snapshots', items, total, limit, offset)
+
+STRICT_CLINICAL_TABLE_ARTIFACT_PATH = Path('/srv/medorion/models/agents/cap_cop_classifier_agent/v1.0.0/multimodal_resnet18_bigdata/preprocess_artifacts/clinical_tabular_standardization_v1.json')
+STRICT_CLINICAL_TABLE_ARTIFACT_ID = 'clinical_tabular_standardization_v1'
+STRICT_CLINICAL_TABLE_ALLOWED_SOURCE_TYPES = {'csv_paste', 'csv_upload_metadata', 'manual_entry'}
+STRICT_CLINICAL_TABLE_LIMITATIONS = [
+    'strict_artifact_order_validation',
+    'no_alias_default_fallback',
+    'no_shadow_execution',
+    'no_model_load',
+    'not_for_diagnosis',
+    'shadow_only',
+]
+
+
+@lru_cache(maxsize=1)
+def _strict_clinical_table_artifact() -> dict[str, Any]:
+    try:
+        artifact = json.loads(STRICT_CLINICAL_TABLE_ARTIFACT_PATH.read_text())
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={'code': 'clinical_csv_artifact_missing', 'message': 'Clinical CSV standardization artifact not found'},
+        ) from exc
+    feature_columns = [str(item).strip() for item in artifact.get('feature_columns', []) if str(item).strip()]
+    if len(feature_columns) != 36:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={'code': 'clinical_csv_artifact_invalid', 'message': 'Clinical CSV standardization artifact must expose exactly 36 feature columns'},
+        )
+    if 'Striated_shadow.1' not in feature_columns:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={'code': 'clinical_csv_artifact_invalid', 'message': 'Clinical CSV standardization artifact must include Striated_shadow.1'},
+        )
+    return artifact
+
+
+@lru_cache(maxsize=1)
+def _strict_clinical_feature_meta_map() -> dict[str, dict[str, Any]]:
+    features = FEATURE_SETS['cap_cop_clinical_feature_set_v1']['features']
+    return {str(feature['model_feature_name']): dict(feature) for feature in features}
+
+
+def _strict_clinical_table_feature_order() -> list[str]:
+    return [str(item).strip() for item in _strict_clinical_table_artifact().get('feature_columns', []) if str(item).strip()]
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _strict_clinical_table_request_rows(payload: ClinicalTableStrictValidationRequestV1) -> list[dict[str, Any]]:
+    rows = list(payload.rows or [])
+    if rows:
+        return rows
+    if payload.sample_row:
+        return [dict(payload.sample_row)]
+    return []
+
+
+def _coerce_strict_clinical_table_value(feature_meta: dict[str, Any], raw_value: Any) -> tuple[str, Any, str | None]:
+    feature_type = str(feature_meta.get('feature_type') or '').strip().lower()
+    allowed_values: set[str] | None = None
+    value_range = feature_meta.get('value_range')
+    if isinstance(value_range, dict):
+        allowed = value_range.get('allowed')
+        if isinstance(allowed, list):
+            allowed_values = {str(item) for item in allowed}
+    if raw_value is None:
+        return 'missing', None, 'missing value'
+    if isinstance(raw_value, str):
+        stripped = raw_value.strip()
+        if stripped == '':
+            return 'missing', None, 'missing value'
+        raw_value = stripped
+    try:
+        if feature_type in {'numeric', 'float', 'number', 'integer', 'int'}:
+            if isinstance(raw_value, bool):
+                raise ValueError('boolean is not a numeric feature value')
+            return 'ok', float(raw_value), None
+        if feature_type == 'boolean':
+            if isinstance(raw_value, bool):
+                return 'ok', raw_value, None
+            if isinstance(raw_value, (int, float)) and raw_value in {0, 1, 0.0, 1.0}:
+                return 'ok', bool(int(raw_value)), None
+            if isinstance(raw_value, str):
+                normalized = raw_value.strip()
+                if normalized in {'0', '1'}:
+                    return 'ok', normalized == '1', None
+                lowered = normalized.lower()
+                if lowered in {'true', 'false'}:
+                    return 'ok', lowered == 'true', None
+            raise ValueError('value is not a recognized boolean')
+        if feature_type in {'categorical', 'enum', 'string', 'text'}:
+            canonical = str(raw_value)
+            if allowed_values is not None and canonical not in allowed_values:
+                raise ValueError(f'value {canonical!r} not in allowed set')
+            enum_mapping = feature_meta.get('enum_mapping')
+            if isinstance(enum_mapping, dict):
+                key_candidates = {str(key) for key in enum_mapping.keys()}
+                value_candidates = {str(value) for value in enum_mapping.values()}
+                if canonical not in key_candidates and canonical not in value_candidates and allowed_values is not None and canonical not in allowed_values:
+                    raise ValueError(f'value {canonical!r} is not part of the enumeration')
+            return 'ok', canonical, None
+        return 'ok', raw_value, None
+    except Exception as exc:
+        return 'type_error', None, str(exc)
+
+
+def _build_strict_clinical_table_validation(
+    *,
+    raw_columns: list[str],
+    rows: list[dict[str, Any]],
+) -> tuple[list[ClinicalTableStrictFeatureMappingItemV1], list[ClinicalTableStrictTypeCoercionItemV1], list[str], list[str], bool, bool, bool, list[str]]:
+    artifact_order = _strict_clinical_table_feature_order()
+    meta_map = _strict_clinical_feature_meta_map()
+    normalized_columns = [str(item).strip() for item in raw_columns if str(item).strip()]
+    artifact_set = set(artifact_order)
+    raw_column_set = set(normalized_columns)
+    duplicate_columns = [column for column in _ordered_unique(normalized_columns) if normalized_columns.count(column) > 1]
+    extra_raw_columns = [column for column in normalized_columns if column not in artifact_set]
+    missing_required_features = [column for column in artifact_order if column not in raw_column_set]
+    order_matches_artifact = normalized_columns == artifact_order
+    row_count = len(rows)
+    feature_mappings: list[ClinicalTableStrictFeatureMappingItemV1] = []
+    coercion_results: list[ClinicalTableStrictTypeCoercionItemV1] = []
+    failure_reasons: list[str] = []
+    has_type_error = False
+    has_missing = False
+
+    if row_count == 0:
+        failure_reasons.append('no_row_data_provided')
+
+    for feature_order, feature_name in enumerate(artifact_order, start=1):
+        feature_meta = meta_map.get(feature_name, {'model_feature_name': feature_name, 'source_clinical_field': feature_name, 'feature_type': 'unknown'})
+        present = feature_name in raw_column_set
+        feature_type = str(feature_meta.get('feature_type') or 'unknown')
+        unit = feature_meta.get('unit')
+        sample_value: Any | None = None
+        coerced_value: Any | None = None
+        coercion_status = 'missing'
+        mapping_status = 'missing'
+        first_error_row_index: int | None = None
+        message: str | None = None
+        if present and row_count:
+            row_error = False
+            for row_index, row in enumerate(rows):
+                raw_value = row.get(feature_name)
+                status_name, coerced, error_message = _coerce_strict_clinical_table_value(feature_meta, raw_value)
+                if sample_value is None and raw_value is not None:
+                    sample_value = raw_value
+                if status_name == 'missing':
+                    has_missing = True
+                    row_error = True
+                    if first_error_row_index is None:
+                        first_error_row_index = row_index
+                        message = f'missing value in row {row_index}'
+                    break
+                if status_name == 'type_error':
+                    has_type_error = True
+                    row_error = True
+                    if first_error_row_index is None:
+                        first_error_row_index = row_index
+                        message = error_message or 'type coercion failed'
+                    break
+                coerced_value = coerced
+            if not row_error:
+                coercion_status = 'ok'
+                mapping_status = 'matched'
+            else:
+                coercion_status = 'type_error' if has_type_error else 'missing'
+                mapping_status = 'type_error' if has_type_error else 'missing'
+        elif present:
+            coercion_status = 'missing'
+            mapping_status = 'missing'
+            has_missing = True
+            message = 'no row data provided for coercion'
+        feature_mappings.append(
+            ClinicalTableStrictFeatureMappingItemV1(
+                feature_order=feature_order,
+                model_feature_name=feature_name,
+                source_clinical_field=str(feature_meta.get('source_clinical_field') or feature_name),
+                required=True,
+                present=present,
+                raw_column=feature_name if present else None,
+                mapping_status=mapping_status,
+                feature_type=feature_type,
+                unit=unit,
+                coercion_status=coercion_status,
+                sample_value=sample_value,
+                coerced_value=coerced_value,
+                message=message,
+            )
+        )
+        coercion_results.append(
+            ClinicalTableStrictTypeCoercionItemV1(
+                feature_order=feature_order,
+                model_feature_name=feature_name,
+                feature_type=feature_type,
+                row_count=row_count,
+                coercion_status=coercion_status,
+                sample_value=sample_value,
+                coerced_value=coerced_value,
+                first_error_row_index=first_error_row_index,
+                message=message,
+            )
+        )
+        if coercion_status == 'type_error':
+            has_type_error = True
+        if coercion_status == 'missing':
+            has_missing = True
+
+    if duplicate_columns:
+        failure_reasons.append('duplicate_raw_columns:' + ','.join(duplicate_columns))
+    if extra_raw_columns:
+        failure_reasons.append('extra_raw_columns:' + ','.join(extra_raw_columns))
+    if missing_required_features:
+        failure_reasons.append('missing_required_features:' + ','.join(missing_required_features))
+    if not order_matches_artifact:
+        failure_reasons.append('artifact_order_mismatch')
+    if has_type_error:
+        failure_reasons.append('type_coercion_failed')
+    if has_missing and not missing_required_features and row_count > 0:
+        failure_reasons.append('row_missing_required_feature_values')
+
+    if missing_required_features:
+        validation_status = 'insufficient_data_for_assessment'
+    elif duplicate_columns or extra_raw_columns or not order_matches_artifact or has_type_error or row_count == 0:
+        validation_status = 'schema_unverified'
+    else:
+        validation_status = 'ready_for_inference'
+
+    can_create_snapshot = validation_status == 'ready_for_inference'
+    return (
+        feature_mappings,
+        coercion_results,
+        missing_required_features,
+        extra_raw_columns,
+        can_create_snapshot,
+        order_matches_artifact,
+        validation_status,
+        _ordered_unique(failure_reasons),
+    )
+
+
+@router.post('/cases/{case_id}/model-input/clinical-table/validate', response_model=ClinicalTableStrictValidationResponseV1)
+def validate_clinical_table_input(case_id: str, payload: ClinicalTableStrictValidationRequestV1, db: Session = Depends(get_db), actor: User = Depends(snapshot_write_guard)) -> ClinicalTableStrictValidationResponseV1:
+    if payload.source_type not in STRICT_CLINICAL_TABLE_ALLOWED_SOURCE_TYPES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'invalid_source_type', 'message': 'source_type must be csv_paste, csv_upload_metadata, or manual_entry'})
+    if payload.not_for_diagnosis is not True:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'not_for_diagnosis_required', 'message': 'not_for_diagnosis must be true'})
+    if payload.shadow_only is not True:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'shadow_only_required', 'message': 'shadow_only must be true'})
+
+    resolved_case_id, _ = _resolve_case(db, case_id)
+    require_case_access(db, actor, resolved_case_id, access_level='detail')
+
+    rows = _strict_clinical_table_request_rows(payload)
+    artifact_order = _strict_clinical_table_feature_order()
+    (
+        feature_mappings,
+        coercion_results,
+        missing_required_features,
+        extra_raw_columns,
+        can_create_snapshot,
+        order_matches_artifact,
+        validation_status,
+        failure_reasons,
+    ) = _build_strict_clinical_table_validation(raw_columns=list(payload.raw_columns), rows=rows)
+
+    return ClinicalTableStrictValidationResponseV1(
+        route=f'/api/v1/cases/{case_id}/model-input/clinical-table/validate',
+        artifact_id=STRICT_CLINICAL_TABLE_ARTIFACT_ID,
+        artifact_ref=str(STRICT_CLINICAL_TABLE_ARTIFACT_PATH),
+        artifact_feature_count=len(artifact_order),
+        artifact_feature_order=artifact_order,
+        feature_mappings=feature_mappings,
+        type_coercion_results=coercion_results,
+        missing_required_features=missing_required_features,
+        extra_raw_columns=extra_raw_columns,
+        validation_status=validation_status,
+        can_create_snapshot=can_create_snapshot,
+        order_matches_artifact=order_matches_artifact,
+        failure_reasons=failure_reasons,
+        source_type=payload.source_type,
+        row_count=len(rows),
+        not_for_diagnosis=True,
+        shadow_only=True,
+        runtime_stub=True,
+        limitations=list(STRICT_CLINICAL_TABLE_LIMITATIONS),
+    )

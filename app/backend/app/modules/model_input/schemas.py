@@ -248,3 +248,66 @@ class ModelInputSnapshotListResponseV1(BaseModel):
     limit: int
     offset: int
     items: list[ModelInputSnapshotSummaryItemV1] = Field(default_factory=list)
+
+
+class ClinicalTableStrictValidationRequestV1(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    raw_columns: list[str] = Field(default_factory=list, min_length=1)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    sample_row: dict[str, Any] = Field(default_factory=dict)
+    source_type: Literal['csv_paste', 'csv_upload_metadata', 'manual_entry']
+    not_for_diagnosis: bool = True
+    shadow_only: bool = True
+
+
+class ClinicalTableStrictFeatureMappingItemV1(BaseModel):
+    feature_order: int
+    model_feature_name: str
+    source_clinical_field: str
+    required: bool = True
+    present: bool = False
+    raw_column: str | None = None
+    mapping_status: Literal['matched', 'missing', 'type_error']
+    feature_type: str
+    unit: str | None = None
+    coercion_status: Literal['ok', 'missing', 'type_error']
+    sample_value: Any | None = None
+    coerced_value: Any | None = None
+    message: str | None = None
+
+
+class ClinicalTableStrictTypeCoercionItemV1(BaseModel):
+    feature_order: int
+    model_feature_name: str
+    feature_type: str
+    row_count: int
+    coercion_status: Literal['ok', 'missing', 'type_error']
+    sample_value: Any | None = None
+    coerced_value: Any | None = None
+    first_error_row_index: int | None = None
+    message: str | None = None
+
+
+class ClinicalTableStrictValidationResponseV1(BaseModel):
+    status: str = 'ok'
+    route: str
+    artifact_id: str
+    artifact_ref: str
+    artifact_feature_count: int
+    artifact_feature_order: list[str] = Field(default_factory=list)
+    feature_mappings: list[ClinicalTableStrictFeatureMappingItemV1] = Field(default_factory=list)
+    type_coercion_results: list[ClinicalTableStrictTypeCoercionItemV1] = Field(default_factory=list)
+    missing_required_features: list[str] = Field(default_factory=list)
+    extra_raw_columns: list[str] = Field(default_factory=list)
+    validation_status: Literal['ready_for_inference', 'schema_unverified', 'insufficient_data_for_assessment']
+    can_create_snapshot: bool = False
+    order_matches_artifact: bool = False
+    failure_reasons: list[str] = Field(default_factory=list)
+    source_type: str
+    row_count: int = 0
+    not_for_diagnosis: bool = True
+    shadow_only: bool = True
+    runtime_stub: bool = True
+    limitations: list[str] = Field(default_factory=list)
+
