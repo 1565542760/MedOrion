@@ -27,6 +27,7 @@ from app.modules.imaging_inputs.schemas import (
     ImagingInputSummaryItemV1,
     ImagingPreprocessResponseV1,
 )
+from app.modules.imaging_inputs.preprocess_plan import build_imaging_preprocessing_job_plan
 from app.modules.shadow_audit.imaging_contract import (
     IMAGING_BIAS_CORRECTION,
     IMAGING_CONVERSION_TOOL,
@@ -216,8 +217,9 @@ def _persist_preprocess_preview(
     preprocessing_status: str,
     execution_mode: str,
     dry_run: bool,
+    execute: bool,
     candidate_kind: str,
-    expected_steps: list[str],
+    job_plan: dict[str, Any],
 ) -> CaseImagingInput:
     provenance = dict(row.provenance_json or {})
     quality_flags = dict(row.quality_flags_json or {})
@@ -225,10 +227,18 @@ def _persist_preprocess_preview(
         'preprocessing_status': preprocessing_status,
         'preprocessing_execution_mode': execution_mode,
         'preprocessing_dry_run': dry_run,
+        'preprocessing_execute': execute,
         'preprocessing_will_execute': False,
         'preprocessing_requested_at': _now().isoformat(),
+        'preprocessing_job_id': job_plan['job_id'],
+        'preprocessing_job_state': job_plan['job_state'],
+        'preprocessing_managed_workspace': job_plan['managed_workspace'],
+        'preprocessing_expected_input_kind': job_plan['expected_input_kind'],
         'preprocessing_candidate_kind': candidate_kind,
-        'expected_steps': expected_steps,
+        'preprocessing_command_plan': job_plan['command_plan'],
+        'preprocessing_expected_outputs': job_plan['expected_outputs'],
+        'preprocessing_safety_gate': job_plan['safety_gate'],
+        'expected_steps': job_plan['expected_steps'],
         'expected_raw_output_file': IMAGING_RAW_OUTPUT_FILE,
         'expected_model_input_file': IMAGING_MODEL_INPUT_FILE,
         'expected_label_file': IMAGING_LABEL_FILE,
@@ -425,29 +435,67 @@ def preprocess_imaging_input(
             detail={'code': 'imaging_input_not_found', 'message': 'Imaging input not found'},
         )
     require_case_access(db, user, str(row.case_id), access_level='detail')
-    if not payload.dry_run:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                'code': 'real_preprocessing_not_enabled',
-                'message': 'This coursework stage only supports dry-run or contract-check preprocessing',
-            },
+
+    job_plan = build_imaging_preprocessing_job_plan(
+        row,
+        dry_run=payload.dry_run,
+        execute=payload.execute,
+        execution_mode=payload.execution_mode,
+    )
+    classification = job_plan['classification']
+
+    if payload.execute:
+        row = _persist_preprocess_preview(
+            db,
+            row,
+            preprocessing_status='blocked_by_contract',
+            execution_mode=payload.execution_mode,
+            dry_run=payload.dry_run,
+            execute=payload.execute,
+            candidate_kind=classification['candidate_kind'],
+            job_plan=job_plan,
+        )
+        status_item = _status_item(row)
+        return ImagingPreprocessResponseV1(
+            status='blocked_by_contract',
+            route='/imaging-inputs/{input_asset_id}/preprocess',
+            dry_run=payload.dry_run,
+            execute=payload.execute,
+            execution_mode=payload.execution_mode,
+            will_execute=False,
+            job_id=job_plan['job_id'],
+            job_state='blocked_by_contract',
+            managed_workspace=job_plan['managed_workspace'],
+            expected_input_kind=job_plan['expected_input_kind'],
+            candidate_kind=classification['candidate_kind'],
+            error_code='execution_not_enabled',
+            message='This coursework stage only builds a managed preprocessing execution skeleton',
+            expected_steps=job_plan['expected_steps'],
+            command_plan=job_plan['command_plan'],
+            expected_outputs=job_plan['expected_outputs'],
+            safety_gate=job_plan['safety_gate'],
+            item=status_item,
+            limitations=[
+                'not_for_diagnosis',
+                'shadow_only',
+                'not_formal_recommendation',
+                'execution_not_enabled',
+                'managed_workspace_only',
+                'no_external_command_execution',
+            ],
         )
 
-    classification = imaging_preprocessing_state(row)
-    if classification['candidate_kind'] == 'unsupported_reference':
+    if job_plan['job_state'] == 'blocked_by_contract':
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
-                'code': 'imaging_input_not_dicom_series',
-                'message': 'Preprocess job only accepts DICOM series references or already-preprocessed NIfTI candidates',
+                'code': 'blocked_by_contract',
+                'message': 'Input is not a supported DICOM series or preprocessed NIfTI candidate',
             },
         )
 
     if classification['candidate_kind'] == 'already_preprocessed_candidate':
-        final_status = IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED
-        expected_steps: list[str] = []
-        message = 'Input already looks preprocessed; skipping DICOM job and keeping this as a candidate only'
+        message = 'Input already looks preprocessed; recording a managed plan only'
         limitations = [
             'not_for_diagnosis',
             'shadow_only',
@@ -455,11 +503,11 @@ def preprocess_imaging_input(
             'already_preprocessed_candidate',
             'no_dicom_job',
             'will_execute=false',
+            'managed_workspace_only',
+            'no_external_command_execution',
         ]
     else:
-        final_status = IMAGING_PREPROCESSING_STATUS_READY
-        expected_steps = [IMAGING_CONVERSION_TOOL, IMAGING_BIAS_CORRECTION]
-        message = 'Contract check passed; no DICOM preprocessing was executed'
+        message = 'Managed preprocessing plan generated; no DICOM preprocessing was executed'
         limitations = [
             'not_for_diagnosis',
             'shadow_only',
@@ -467,29 +515,40 @@ def preprocess_imaging_input(
             'no_dicom_read',
             'dry_run_only',
             'will_execute=false',
+            'managed_workspace_only',
+            'no_external_command_execution',
             'preprocessing_contract_ready',
         ]
 
     row = _persist_preprocess_preview(
         db,
         row,
-        preprocessing_status=final_status,
+        preprocessing_status=job_plan['job_state'],
         execution_mode=payload.execution_mode,
         dry_run=payload.dry_run,
+        execute=payload.execute,
         candidate_kind=classification['candidate_kind'],
-        expected_steps=expected_steps,
+        job_plan=job_plan,
     )
     status_item = _status_item(row)
     return ImagingPreprocessResponseV1(
-        status=final_status,
+        status='planned',
         route='/imaging-inputs/{input_asset_id}/preprocess',
         dry_run=payload.dry_run,
+        execute=payload.execute,
         execution_mode=payload.execution_mode,
         will_execute=False,
+        job_id=job_plan['job_id'],
+        job_state=job_plan['job_state'],
+        managed_workspace=job_plan['managed_workspace'],
+        expected_input_kind=job_plan['expected_input_kind'],
         candidate_kind=classification['candidate_kind'],
         error_code=None,
         message=message,
-        expected_steps=expected_steps,
+        expected_steps=job_plan['expected_steps'],
+        command_plan=job_plan['command_plan'],
+        expected_outputs=job_plan['expected_outputs'],
+        safety_gate=job_plan['safety_gate'],
         item=status_item,
         limitations=limitations,
     )

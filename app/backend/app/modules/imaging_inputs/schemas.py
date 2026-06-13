@@ -41,8 +41,8 @@ class DicomSeriesImagingInputCreateRequestV1(BaseModel):
 
 class ImagingPreprocessRequestV1(BaseModel):
     dry_run: bool = True
-    execution_mode: Literal['contract_check', 'dry_run'] = 'contract_check'
-
+    execute: bool = False
+    execution_mode: Literal['contract_check', 'dry_run', 'plan_only'] = 'plan_only'
 
 
 class ImagingInputSummaryItemV1(BaseModel):
@@ -136,14 +136,22 @@ class ImagingInputPreprocessingStatusResponseV1(BaseModel):
 
 
 class ImagingPreprocessResponseV1(BaseModel):
-    status: str = 'not_implemented'
+    status: str = 'planned'
     route: str
     dry_run: bool = True
-    execution_mode: Literal['contract_check', 'dry_run'] = 'contract_check'
+    execute: bool = False
+    execution_mode: Literal['contract_check', 'dry_run', 'plan_only'] = 'plan_only'
     will_execute: bool = False
+    job_id: str = 'unknown'
+    job_state: str = 'not_implemented'
+    managed_workspace: str = ''
+    expected_input_kind: str = 'unknown'
     candidate_kind: str = 'unknown'
     error_code: str | None = 'preprocessing_not_implemented'
     message: str | None = None
     expected_steps: list[str] = Field(default_factory=list)
+    command_plan: list[str] = Field(default_factory=list)
+    expected_outputs: dict[str, str] = Field(default_factory=dict)
+    safety_gate: dict[str, Any] = Field(default_factory=dict)
     item: ImagingInputPreprocessingStatusItemV1
     limitations: list[str] = Field(default_factory=list)
