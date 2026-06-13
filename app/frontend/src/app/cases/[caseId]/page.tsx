@@ -2,9 +2,11 @@
 
 import Link from 'next/link';
 import { use, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Descriptions, Space, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Descriptions, Modal, Space, Tabs, Tag, Typography } from 'antd';
 import {
+  executeCapCopShadowWorkflow,
   getCapCopShadowWorkflowReadiness,
+  previewCapCopShadowWorkflow,
   getShadowRunOutputs,
   listCaseImagingInputs,
   listCases,
@@ -14,6 +16,7 @@ import {
   type CaseItem,
   type CapCopShadowWorkflowBranchReadiness,
   type CapCopShadowWorkflowReadinessResponse,
+  type CapCopShadowWorkflowResponse,
   type ShadowInferenceRunItem,
   type ShadowInferenceRunOutputItem,
 } from '@/lib/api';
@@ -194,6 +197,145 @@ function resolveWorkflowNextAction(caseId: string, nextAction?: string | null) {
   return { label: raw, href: null as string | null, hint: raw };
 }
 
+function stringifyWorkflowList(value: unknown): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((item) => String(item));
+  if (typeof value === 'string') return value.trim() ? [value] : [];
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).flatMap(([key, item]) => {
+      if (item === null || item === undefined || item === false) return [];
+      if (item === true) return [key];
+      if (Array.isArray(item)) return item.map((entry) => key + ': ' + String(entry));
+      if (typeof item === 'object') return [key + ': ' + JSON.stringify(item)];
+      return [key + ': ' + String(item)];
+    });
+  }
+  return [String(value)];
+}
+
+function getWorkflowPlanStatusLabel(value?: string | null) {
+  switch ((value || '').toLowerCase()) {
+    case 'ready':
+    case 'planned':
+      return '计划执行';
+    case 'executed':
+      return '已执行';
+    case 'skipped':
+      return '已跳过';
+    case 'failed':
+      return '执行失败';
+    case 'ready_all':
+      return '全部分支可运行';
+    case 'ready_partial':
+      return '部分分支可运行';
+    case 'blocked':
+      return '当前不可运行';
+    case 'disabled':
+      return '已禁用';
+    case 'schema_unverified':
+      return 'schema 未验证';
+    case 'need_preprocessing':
+      return '需要预处理';
+    case 'prototype_only':
+      return '仅原型';
+    default:
+      return value || '不可运行';
+  }
+}
+
+function getWorkflowPlanStatusColor(value?: string | null, canRun?: boolean) {
+  switch ((value || '').toLowerCase()) {
+    case 'executed':
+    case 'ready':
+    case 'planned':
+    case 'ready_all':
+      return 'green';
+    case 'ready_partial':
+      return 'blue';
+    case 'skipped':
+      return 'gold';
+    case 'failed':
+      return 'red';
+    default:
+      return canRun ? 'green' : 'default';
+  }
+}
+
+function getWorkflowProbabilitySummary(probabilityJson: unknown) {
+  if (!isRecord(probabilityJson)) return '-';
+  const cap = getProbability(probabilityJson, 'CAP');
+  const cop = getProbability(probabilityJson, 'COP');
+  if (cap !== null || cop !== null) {
+    return 'CAP=' + formatProbability(cap) + ' / COP=' + formatProbability(cop);
+  }
+  return JSON.stringify(probabilityJson);
+}
+
+function getWorkflowConfidenceSummary(confidenceJson: unknown) {
+  return getScalarValue(confidenceJson);
+}
+
+function getWorkflowBranchEntry(source: CapCopShadowWorkflowResponse | CapCopShadowWorkflowReadinessResponse | null | undefined, key: string) {
+  const workflowSource = source as Record<string, unknown> & {
+    execution_plan?: { branches?: unknown };
+    plan?: { branches?: unknown };
+    branches?: unknown;
+    result?: { branches?: unknown };
+  };
+  const possible = [workflowSource?.execution_plan?.branches, workflowSource?.plan?.branches, workflowSource?.branches, workflowSource?.result?.branches];
+  for (const item of possible) {
+    if (!item) continue;
+    if (Array.isArray(item)) {
+      const found = item.find((branch) => String((branch as Record<string, unknown>).branch || (branch as Record<string, unknown>).key || '') === key);
+      if (found) return found as Record<string, unknown>;
+    } else if (typeof item === 'object') {
+      const branch = (item as Record<string, unknown>)[key];
+      if (branch) return branch as Record<string, unknown>;
+    }
+  }
+  return null;
+}
+
+function buildWorkflowBranchView(caseId: string, key: string, title: string, source: CapCopShadowWorkflowResponse | CapCopShadowWorkflowReadinessResponse | null | undefined, fallbackRequirement: string, fallbackNextHint: string) {
+  const branch = getWorkflowBranchEntry(source, key) || {};
+  const canRun = Boolean(branch.can_run);
+  const status = String(branch.status || (canRun ? 'planned' : 'skipped'));
+  const disabledReasons = stringifyWorkflowList(branch.disabled_reasons);
+  const requiredInputs = stringifyWorkflowList(branch.required_inputs);
+  const detectedInputs = stringifyWorkflowList(branch.detected_inputs);
+  const nextAction = resolveWorkflowNextAction(caseId, typeof branch.next_action === 'string' ? branch.next_action : null);
+  const limitations = stringifyWorkflowList(branch.limitations || disabledReasons);
+  return {
+    key,
+    title,
+    status,
+    statusColor: getWorkflowPlanStatusColor(status, canRun),
+    canRun,
+    disabledReasons,
+    requiredInputs: requiredInputs.length ? requiredInputs : [fallbackRequirement],
+    detectedInputs,
+    nextActionLabel: nextAction.label,
+    nextActionHref: nextAction.href,
+    nextActionHint: nextAction.hint || fallbackNextHint,
+    limitations,
+    shadowRunId: typeof branch.shadow_run_id === 'string' ? branch.shadow_run_id : null,
+    outputId: typeof branch.output_id === 'string' ? branch.output_id : null,
+    candidateLabel: typeof branch.candidate_label === 'string' ? branch.candidate_label : null,
+    probabilitySummary: getWorkflowProbabilitySummary(branch.prediction_probability_json),
+    confidenceSummary: getWorkflowConfidenceSummary(branch.confidence_json),
+    uncertaintySummary: getWorkflowConfidenceSummary(branch.uncertainty_json),
+    note: typeof branch.note === 'string' ? branch.note : (typeof branch.skipped_reason === 'string' ? branch.skipped_reason : ''),
+  };
+}
+
+function normalizeWorkflowBranches(caseId: string, source: CapCopShadowWorkflowResponse | CapCopShadowWorkflowReadinessResponse | null | undefined) {
+  return [
+    buildWorkflowBranchView(caseId, 'clinical_mlp', 'clinical MLP', source, '需要 36-feature artifact-order snapshot', '进入临床输入 / 输入快照'),
+    buildWorkflowBranchView(caseId, 'imaging_resnet18', 'imaging ResNet18', source, '需要预处理后的 image.nii.gz', '进入影像输入 / 预处理契约'),
+    buildWorkflowBranchView(caseId, 'multimodal_resnet18', 'multimodal ResNet18', source, '需要 clinical snapshot + image.nii.gz', '补齐临床 + 影像后再进入多模态'),
+  ];
+}
+
 export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId: string }> }) {
   const { caseId } = use(params);
   const [context, setContext] = useState<CaseContext>({
@@ -210,6 +352,12 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
   const [loading, setLoading] = useState(true);
   const [workflowReadiness, setWorkflowReadiness] = useState<CapCopShadowWorkflowReadinessResponse | null>(null);
   const [workflowReadinessError, setWorkflowReadinessError] = useState('');
+  const [workflowPreview, setWorkflowPreview] = useState<CapCopShadowWorkflowResponse | null>(null);
+  const [workflowPreviewLoading, setWorkflowPreviewLoading] = useState(false);
+  const [workflowPreviewError, setWorkflowPreviewError] = useState('');
+  const [workflowExecuteResult, setWorkflowExecuteResult] = useState<CapCopShadowWorkflowResponse | null>(null);
+  const [workflowExecuteLoading, setWorkflowExecuteLoading] = useState(false);
+  const [workflowExecuteError, setWorkflowExecuteError] = useState('');
 
   const latestShadowRunId = context.latestShadowRun?.shadow_run_id || '';
   const latestShadowCandidate = context.latestShadowOutput?.candidate_label || '';
@@ -220,6 +368,16 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
   useEffect(() => {
     let active = true;
     void (async () => {
+      await Promise.resolve();
+      if (!active) return;
+      setLoading(true);
+      setWorkflowReadiness(null);
+      setWorkflowReadinessError('');
+      setWorkflowPreview(null);
+      setWorkflowPreviewError('');
+      setWorkflowExecuteResult(null);
+      setWorkflowExecuteLoading(false);
+      setWorkflowExecuteError('');
       try {
         const [casesResult, patientsResult, snapshotResult, imagingResult, shadowResult, workflowResult] = await Promise.allSettled([
           listCases(),
@@ -383,6 +541,7 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
       const detectedInputs = branch?.detected_inputs || [];
       const canRun = !!branch?.can_run;
       return {
+        key: title,
         title,
         info: {
           state: getWorkflowBranchStatusLabel(branch?.status || (canRun ? 'ready' : 'blocked')),
@@ -430,33 +589,120 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
     workflowBranches,
   } = workflowGateData;
 
-  return (
-    <Space direction='vertical' size={16} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-      <Card size='small' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+  const workflowPreviewBranches = useMemo(() => (workflowPreview ? normalizeWorkflowBranches(caseId, workflowPreview) : []) as ReturnType<typeof normalizeWorkflowBranches>, [caseId, workflowPreview]);
+  const workflowExecuteBranches = useMemo(() => (workflowExecuteResult ? normalizeWorkflowBranches(caseId, workflowExecuteResult) : []) as ReturnType<typeof normalizeWorkflowBranches>, [caseId, workflowExecuteResult]);
+  const workflowActionCanExecute = Boolean(workflowPreview && workflowPreviewBranches.some((branch) => branch.canRun));
+
+  const handleWorkflowPreview = async () => {
+    setWorkflowPreviewLoading(true);
+    setWorkflowPreviewError('');
+    setWorkflowExecuteResult(null);
+    setWorkflowExecuteError('');
+    try {
+      const result = await previewCapCopShadowWorkflow(caseId);
+      setWorkflowPreview(result);
+    } catch {
+      setWorkflowPreview(null);
+      setWorkflowPreviewError('后端暂时无法返回 workflow 预览，请稍后再试。');
+    } finally {
+      setWorkflowPreviewLoading(false);
+    }
+  };
+
+  const handleWorkflowExecute = () => {
+    Modal.confirm({
+      title: '确认执行 CAP/COP shadow workflow',
+      centered: true,
+      width: 640,
+      okText: '确认执行',
+      cancelText: '取消',
+      content: (
         <Space direction='vertical' size={8} style={{ width: '100%' }}>
-          <Space wrap size={8}>
-            <Typography.Title level={4} style={{ margin: 0 }}>病例工作台</Typography.Title>
-            <Tag color='blue'>Shadow only</Tag>
-            <Tag color='gold'>非诊断</Tag>
-            <Tag color='gold'>非正式推荐</Tag>
-          </Space>
+          <Typography.Text>这一步不会生成诊断结论，也不是正式推荐。</Typography.Text>
+          <Typography.Text>只会写 shadow audit，不写 trace / evidence。</Typography.Text>
+          <Typography.Text>概率未校准，请先确认 preview 结果。</Typography.Text>
+        </Space>
+      ),
+      onOk: async () => {
+        setWorkflowExecuteLoading(true);
+        setWorkflowExecuteError('');
+        try {
+          const result = await executeCapCopShadowWorkflow(caseId, { mode: 'execute' });
+          setWorkflowExecuteResult(result);
+        } catch {
+          setWorkflowExecuteResult(null);
+          setWorkflowExecuteError('后端暂时无法执行 workflow，请稍后再试。');
+          throw new Error('workflow execute failed');
+        } finally {
+          setWorkflowExecuteLoading(false);
+        }
+      },
+    });
+  };
+
+  const renderWorkflowActionCard = (
+    title: string,
+    mode: 'preview' | 'execute',
+    response: CapCopShadowWorkflowResponse | null,
+    branches: ReturnType<typeof normalizeWorkflowBranches>,
+  ) => {
+    if (!response) return null;
+    const overallStatusLabel = getWorkflowOverallStatusLabel(response.overall_status || response.status || null);
+    const branchSummary = branches.filter((branch) => branch.canRun).map((branch) => branch.title).join(' / ') || '无';
+    const limitations = branches.flatMap((branch) => branch.limitations).filter(Boolean).join('；') || '无';
+    const alertMessage = mode === 'preview'
+      ? 'preview 只会生成 execution plan，不会改变 shadow counts，也不会写 trace / evidence。'
+      : 'execute 只会写 shadow audit，不会写 trace / evidence。';
+    const alertDescription = mode === 'preview'
+      ? '分支会显示 planned / skipped / failed，并标出预计会写入 shadow audit 的分支。'
+      : '分支会显示 executed / skipped / failed，并回填 shadow_run_id / output_id / candidate_label 等结果。';
+    return (
+      <Card size='small' title={title} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+        <Space direction='vertical' size={12} style={{ width: '100%' }}>
+          <Alert type='info' showIcon message={alertMessage} description={alertDescription} />
           <Descriptions bordered size='small' column={2}>
-            {headerSummary.map((item) => (
-              <Descriptions.Item key={item.label} label={item.label}>
-                {item.value}
-              </Descriptions.Item>
-            ))}
+            <Descriptions.Item label='overall_status'>{overallStatusLabel}</Descriptions.Item>
+            <Descriptions.Item label='mode'>{mode}</Descriptions.Item>
+            <Descriptions.Item label='可运行分支'>{branchSummary}</Descriptions.Item>
+            <Descriptions.Item label='限制说明'>{limitations}</Descriptions.Item>
           </Descriptions>
-          <Typography.Text type='secondary'>
-            这里是病例总工作台，所有模块都从这一层进入，不再一层套一层。
-          </Typography.Text>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, width: '100%' }}>
+            {branches.map((branch) => (
+              <div key={branch.key} style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff', minWidth: 0 }}>
+                <Space direction='vertical' size={6} style={{ width: '100%' }}>
+                  <Typography.Text type='secondary'>{branch.title}</Typography.Text>
+                  <Space wrap size={6}>
+                    <Tag color={branch.statusColor}>{getWorkflowPlanStatusLabel(branch.status)}</Tag>
+                    <Tag color={branch.canRun ? 'green' : 'default'}>{branch.canRun ? 'can_run=是' : 'can_run=否'}</Tag>
+                  </Space>
+                  <Typography.Text><strong>输入要求：</strong>{branch.requiredInputs.join('；') || '无'}</Typography.Text>
+                  <Typography.Text><strong>当前缺口：</strong>{branch.disabledReasons.join('；') || branch.note || '无'}</Typography.Text>
+                  <Typography.Text><strong>已检测输入：</strong>{branch.detectedInputs.join('；') || '后端未返回'}</Typography.Text>
+                  <Typography.Text><strong>限制说明：</strong>{branch.limitations.join('；') || '无'}</Typography.Text>
+                  {branch.shadowRunId || branch.outputId || branch.candidateLabel ? (
+                    <Descriptions bordered size='small' column={1}>
+                      <Descriptions.Item label='shadow_run_id'>{branch.shadowRunId || '-'}</Descriptions.Item>
+                      <Descriptions.Item label='output_id'>{branch.outputId || '-'}</Descriptions.Item>
+                      <Descriptions.Item label='candidate_label'>{branch.candidateLabel || '-'}</Descriptions.Item>
+                      <Descriptions.Item label='CAP/COP 概率'>{branch.probabilitySummary}</Descriptions.Item>
+                      <Descriptions.Item label='confidence'>{branch.confidenceSummary}</Descriptions.Item>
+                      <Descriptions.Item label='uncertainty'>{branch.uncertaintySummary}</Descriptions.Item>
+                    </Descriptions>
+                  ) : null}
+                  <Typography.Text type='secondary'><strong>下一步：</strong>{branch.nextActionHint}</Typography.Text>
+                  {branch.nextActionHref ? <Link href={branch.nextActionHref}>{branch.nextActionLabel}</Link> : <Typography.Text type='secondary'>{branch.nextActionLabel}</Typography.Text>}
+                </Space>
+              </div>
+            ))}
+          </div>
         </Space>
       </Card>
+    );
+  };
 
-      {context.loadingError ? <Alert type='error' showIcon message={context.loadingError} /> : null}
+  return (
+    <Space direction='vertical' size={16} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
       {loadingBanner}
-
-
       <Card size='small' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
         <Space direction='vertical' size={12} style={{ width: '100%' }}>
           <Space wrap size={8}>
@@ -469,22 +715,23 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
           <Alert
             type={workflowAnyReady ? 'info' : 'warning'}
             showIcon
-            message={workflowFullyReady ? '执行入口待后端编排阶段开放' : workflowAnyReady ? '工作流门禁预览：部分分支可运行' : '工作流门禁未完全通过'}
+            message={workflowFullyReady ? 'workflow 门禁已通过，可先预览再确认执行。' : workflowAnyReady ? 'workflow 仅部分分支可运行，请先预览再确认执行。' : 'workflow 门禁未通过。'}
             description={workflowGateMessage}
           />
-          <Button block disabled size='large'>{workflowAnyReady ? '执行入口待后端编排阶段开放' : '暂不可运行 CAP/COP shadow workflow'}</Button>
+          <Space wrap size={8}>
+            <Button type='primary' loading={workflowPreviewLoading} onClick={handleWorkflowPreview}>预览 CAP/COP shadow workflow</Button>
+            <Button disabled={!workflowPreview || !workflowActionCanExecute} loading={workflowExecuteLoading} onClick={handleWorkflowExecute}>确认执行 shadow workflow</Button>
+          </Space>
           <Typography.Text type='secondary'>
-            {workflowFullyReady
-              ? '当前三条分支都已具备各自 readiness，但本阶段只做门禁预览。'
-              : workflowAnyReady
-                ? '当前至少有部分分支满足输入条件，但本阶段仍不开放真实执行入口。'
-                : '当前只显示 readiness skeleton，不会触发任何 one-shot 或写入。'}
+            preview 只会生成 execution plan，不会改变 shadow counts，也不会写 trace / evidence；execute 只会写 shadow audit，不会写 trace / evidence。
           </Typography.Text>
+          {workflowPreviewError ? <Alert type='error' showIcon message={workflowPreviewError} /> : null}
+          {workflowExecuteError ? <Alert type='error' showIcon message={workflowExecuteError} /> : null}
           {workflowGateBlockers.length > 0 ? (
             <Alert
               type='warning'
               showIcon
-              message='禁用原因'
+              message='workflow 门禁阻塞原因'
               description={(
                 <ul style={{ margin: 0, paddingLeft: 20 }}>
                   {workflowGateBlockers.map((reason) => <li key={reason}>{reason}</li>)}
@@ -499,20 +746,22 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
                   <Typography.Text type='secondary'>{item.title}</Typography.Text>
                   <Space wrap size={6}>
                     <Tag color={item.info.stateColor}>{item.info.state}</Tag>
-                    <Tag color={item.canRun ? 'green' : 'default'}>{item.canRun ? '门禁可用' : '门禁禁用'}</Tag>
+                    <Tag color={item.canRun ? 'green' : 'default'}>{item.canRun ? '可运行' : '已跳过'}</Tag>
                   </Space>
                   <Typography.Text><strong>输入要求：</strong>{item.info.requirement}</Typography.Text>
                   <Typography.Text><strong>当前缺口：</strong>{item.info.gap}</Typography.Text>
-                  <Typography.Text><strong>required_inputs：</strong>{item.requiredInputs.length ? item.requiredInputs.join('\uFF1B') : '\u540e\u7aef\u672a\u8fd4\u56de'}</Typography.Text>
-                  <Typography.Text><strong>detected_inputs：</strong>{item.detectedInputs.length ? item.detectedInputs.join('\uFF1B') : '\u540e\u7aef\u672a\u8fd4\u56de'}</Typography.Text>
+                  <Typography.Text><strong>已检测输入：</strong>{item.detectedInputs.join('；') || '后端未返回'}</Typography.Text>
                   <Typography.Text type='secondary'><strong>下一步：</strong>{item.info.note}</Typography.Text>
                   {item.info.nextHref ? <Link href={item.info.nextHref}>{item.nextHint}</Link> : <Typography.Text type='secondary'>{item.nextHint}</Typography.Text>}
                 </Space>
               </div>
             ))}
           </div>
+          {renderWorkflowActionCard('预览 CAP/COP shadow workflow', 'preview', workflowPreview, workflowPreviewBranches)}
+          {renderWorkflowActionCard('执行 CAP/COP shadow workflow', 'execute', workflowExecuteResult, workflowExecuteBranches)}
         </Space>
       </Card>
+
 
       <Tabs
         destroyInactiveTabPane={false}
@@ -522,6 +771,16 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
             label: '总览',
             children: (
               <Space direction='vertical' size={12} style={{ width: '100%' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, width: '100%' }}>
+                  {headerSummary.map((item) => (
+                    <div key={item.label} style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
+                      <Space direction='vertical' size={4}>
+                        <Typography.Text type='secondary'>{item.label}</Typography.Text>
+                        <Typography.Text strong>{item.value}</Typography.Text>
+                      </Space>
+                    </div>
+                  ))}
+                </div>
                 <Typography.Text type='secondary'>按医生工作流把病例状态收拢在一层里看，不把技术状态直接堆成主视觉。</Typography.Text>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, width: '100%' }}>
                   {overviewCards.map((item) => (

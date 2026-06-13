@@ -35,142 +35,6 @@ export function getRefreshToken(): string {
   return window.localStorage.getItem(REFRESH_TOKEN_KEY) || '';
 }
 
-
-export type PatientItem = {
-  patient_id: string;
-  external_patient_id?: string | null;
-  display_name?: string | null;
-  sex?: string | null;
-  birth_date?: string | null;
-  consent_status?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-export type PatientCreatePayload = {
-  external_patient_id?: string | null;
-  display_name?: string | null;
-  name?: string | null;
-  sex?: string | null;
-  birth_date?: string | null;
-  consent_status?: string;
-};
-
-export type CaseItem = {
-  case_id: string;
-  case_no?: string | null;
-  patient_id: string;
-  disease_task?: string | null;
-  status?: string | null;
-  trace_id?: string | null;
-  chief_complaint?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-export type CaseCreatePayload = {
-  patient_id: string;
-  case_no?: string | null;
-  disease_task?: string | null;
-  status?: string | null;
-  chief_complaint?: string | null;
-};
-
-export type CaseImagingInputCreatePayload = {
-  patient_id?: string | null;
-  trace_id?: string | null;
-  modality: string;
-  source_type: string;
-  storage_uri: string;
-  deidentified?: boolean;
-  not_for_diagnosis?: boolean;
-  provenance_json?: Record<string, unknown> | null;
-  quality_flags_json?: Record<string, unknown> | null;
-};
-
-export type CaseImagingInputItem = {
-  input_asset_id: string;
-  case_id: string;
-  patient_id?: string | null;
-  trace_id?: string | null;
-  modality: string;
-  source_type: string;
-  storage_uri: string;
-  deidentified: boolean;
-  not_for_diagnosis: boolean;
-  provenance_json?: Record<string, unknown> | null;
-  quality_flags_json?: Record<string, unknown> | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-export type CaseImagingInputListResponse = {
-  status?: string;
-  route?: string;
-  total: number;
-  limit: number;
-  offset: number;
-  items: CaseImagingInputItem[];
-};
-
-export type DicomSeriesRegisterPayload = {
-  series_label: string;
-  source_type: string;
-  dicom_series_ref: string;
-  storage_uri?: string | null;
-  deidentified?: boolean;
-  not_for_diagnosis?: boolean;
-  provenance_json?: Record<string, unknown> | null;
-  quality_flags_json?: Record<string, unknown> | null;
-};
-
-export type DicomSeriesRegisterResponse = CaseImagingInputItem & {
-  source_format?: string | null;
-  preprocessed_format?: string | null;
-  preprocessing_status?: string | null;
-};
-
-export type ImagingPreprocessingStatusResponse = {
-  status?: string;
-  route?: string;
-  input_asset_id: string;
-  source_format?: string | null;
-  preprocessed_format?: string | null;
-  preprocessing_script?: string | null;
-  conversion_tool?: string | null;
-  bias_correction?: string | null;
-  raw_output_file?: string | null;
-  model_input_file?: string | null;
-  label_file?: string | null;
-  preprocessing_status?: string | null;
-  message?: string | null;
-};
-
-export type ImagingPreprocessResponse = ImagingPreprocessingStatusResponse & {
-  error_code?: string | null;
-};
-
-export type CapCopShadowWorkflowBranchReadiness = {
-  status?: string | null;
-  can_run?: boolean;
-  disabled_reasons?: string[];
-  required_inputs?: string[];
-  detected_inputs?: string[];
-  next_action?: string | null;
-};
-
-export type CapCopShadowWorkflowReadinessResponse = {
-  status?: string | null;
-  route?: string | null;
-  overall_status?: 'ready_all' | 'ready_partial' | 'blocked' | string | null;
-  branches: {
-    clinical_mlp?: CapCopShadowWorkflowBranchReadiness | null;
-    imaging_resnet18?: CapCopShadowWorkflowBranchReadiness | null;
-    multimodal_resnet18?: CapCopShadowWorkflowBranchReadiness | null;
-  };
-};
-
-
 export type CurrentUser = {
   user_id: string;
   username: string;
@@ -178,6 +42,13 @@ export type CurrentUser = {
   email?: string | null;
   role: string;
   is_active: boolean;
+};
+
+export type LoginResponse = {
+  access_token: string;
+  refresh_token: string;
+  token_type?: string;
+  expires_in?: number;
 };
 
 export function saveCurrentUser(user: CurrentUser) {
@@ -195,6 +66,117 @@ export function readCurrentUser(): CurrentUser | null {
     return null;
   }
 }
+
+export const apiConfig = { mode: API_MODE, baseURL: API_BASE_URL };
+
+const mock = {
+  cases: [
+    { case_id: 'case-001', patient_id: 'patient-001', disease_task: 'cap_cop', status: 'in_review', trace_id: 'trace-demo', case_no: 'MO-CASE-001' },
+    { case_id: 'case-002', patient_id: 'patient-002', disease_task: 'cap_cop', status: 'awaiting_input', trace_id: 'trace-demo-2', case_no: 'MO-CASE-002' },
+  ],
+  imagingInputs: [
+    {
+      input_asset_id: 'img-demo-001',
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      trace_id: 'trace-demo',
+      modality: 'CT',
+      source_type: 'demo',
+      storage_uri: 'managed://coursework-demo/case-001/ct-series-01',
+      deidentified: true,
+      not_for_diagnosis: true,
+      provenance_json: { origin: 'coursework-demo', capture_mode: 'manual-registration', source_case_link: 'case-001' },
+      quality_flags_json: { artifact_free: true, slice_count_ok: true, orientation_ok: true },
+      created_at: '2026-06-08T00:00:00Z',
+      updated_at: '2026-06-08T00:00:00Z',
+    },
+  ] as CaseImagingInputItem[],
+  missingQueries: [
+    {
+      query_id: 'query-demo-pending',
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      field_name: 'wbc',
+      field_label: '白细胞',
+      modality: 'lab',
+      reason: 'demo',
+      question_text: '请补充白细胞值。',
+      status: 'pending',
+      trace_id: 'trace-demo',
+      policy_version: 'v1',
+      value_source: 'unknown',
+      doctor_answer_text: null,
+      doctor_answer_json: null,
+      default_strategy_code: null,
+      default_reason: null,
+      default_value_json: null,
+      created_at: '2026-06-02T00:00:00Z',
+      updated_at: '2026-06-02T00:00:00Z',
+    },
+    {
+      query_id: 'query-demo-answer',
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      field_name: 'crp',
+      field_label: 'C反应蛋白',
+      modality: 'lab',
+      reason: 'demo',
+      question_text: '请补充CRP值。',
+      status: 'answered',
+      trace_id: 'trace-demo',
+      policy_version: 'v1',
+      value_source: 'doctor_provided',
+      doctor_answer_text: '11.2',
+      doctor_answer_json: { value: 11.2 },
+      default_strategy_code: null,
+      default_reason: null,
+      default_value_json: null,
+      created_at: '2026-06-02T00:00:00Z',
+      updated_at: '2026-06-02T00:00:00Z',
+    },
+    {
+      query_id: 'query-demo-default',
+      case_id: 'case-001',
+      patient_id: 'patient-001',
+      field_name: 'procalcitonin',
+      field_label: '降钙素原',
+      modality: 'lab',
+      reason: 'demo',
+      question_text: '请补充降钙素原。',
+      status: 'default_applied',
+      trace_id: 'trace-demo',
+      policy_version: 'v1',
+      value_source: 'default_applied',
+      doctor_answer_text: null,
+      doctor_answer_json: null,
+      default_strategy_code: 'demo_default',
+      default_reason: '演示默认策略',
+      default_value_json: { value: 'demo-default' },
+      created_at: '2026-06-02T00:00:00Z',
+      updated_at: '2026-06-02T00:00:00Z',
+    },
+  ],
+  recommendations: [
+    { recommendation_id: 'rec-001', title: 'Demo recommendation', risk_score: 0.78, trace_id: 'trace-demo' },
+  ],
+  qualityReviews: [
+    {
+      review_id: 'review-demo-001',
+      case_id: 'case-001',
+      trace_id: 'trace-demo',
+      target_type: 'recommendation',
+      target_id: 'rec-001',
+      status: 'open',
+      attribution: 'human_feedback',
+      severity: 'medium',
+      summary: 'Demo quality review',
+      related_feedback_id: 'feedback-demo-001',
+      opened_by: 'dev_doctor',
+      created_at: '2026-06-02T00:00:00Z',
+      updated_at: '2026-06-02T00:00:00Z',
+    },
+  ],
+};
 
 client.interceptors.request.use((config) => {
   config.headers.set('x-request-id', uuidv4());
@@ -225,131 +207,6 @@ function unwrapItem<T>(data: unknown): T {
   return data as T;
 }
 
-function extractPreprocessingSummary(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  const summary = raw.preprocessing_summary;
-  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null;
-  return summary as Record<string, unknown>;
-}
-
-function enrichShadowRunOutputItem(item: ShadowInferenceRunOutputItem): ShadowInferenceRunOutputItem {
-  return {
-    ...item,
-    preprocessing_summary: item.preprocessing_summary || extractPreprocessingSummary(item.prediction_raw_json),
-  };
-}
-
-export const apiConfig = { mode: API_MODE, baseURL: API_BASE_URL };
-
-const mock = {
-  cases: [
-    { case_id: 'case-001', patient_id: 'patient-001', disease_task: 'CAP', status: 'in_review', trace_id: 'trace-demo' },
-    { case_id: 'case-002', patient_id: 'patient-002', disease_task: 'COP', status: 'awaiting_input', trace_id: 'trace-demo-2' },
-  ],
-  imagingInputs: [
-    {
-      input_asset_id: 'img-demo-001',
-      case_id: 'case-001',
-      patient_id: 'patient-001',
-      trace_id: 'trace-demo',
-      modality: 'CT',
-      source_type: 'demo',
-      storage_uri: 'managed://coursework-demo/case-001/ct-series-01',
-      deidentified: true,
-      not_for_diagnosis: true,
-      provenance_json: { origin: 'coursework-demo', capture_mode: 'manual-registration', source_case_link: 'case-001' },
-      quality_flags_json: { artifact_free: true, slice_count_ok: true, orientation_ok: true },
-      created_at: '2026-06-08T00:00:00Z',
-      updated_at: '2026-06-08T00:00:00Z',
-    },
-  ],
-  missingQueries: [
-    {
-      query_id: 'query-demo-pending',
-      case_id: 'case-001',
-      patient_id: 'patient-001',
-      field_name: 'wbc',
-      field_label: '白细胞',
-      modality: 'lab',
-      reason: 'demo',
-      question_text: '请补充白细胞值',
-      status: 'pending',
-      trace_id: 'trace-demo',
-      policy_version: 'v1',
-      value_source: 'unknown',
-      doctor_answer_text: null,
-      doctor_answer_json: null,
-      default_strategy_code: null,
-      default_reason: null,
-      default_value_json: null,
-      created_at: '2026-06-02T00:00:00Z',
-      updated_at: '2026-06-02T00:00:00Z',
-    },
-    {
-      query_id: 'query-demo-answer',
-      case_id: 'case-001',
-      patient_id: 'patient-001',
-      field_name: 'crp',
-      field_label: 'C反应蛋白',
-      modality: 'lab',
-      reason: 'demo',
-      question_text: '请补充CRP值',
-      status: 'answered',
-      trace_id: 'trace-demo',
-      policy_version: 'v1',
-      value_source: 'doctor_provided',
-      doctor_answer_text: '11.2',
-      doctor_answer_json: { value: 11.2 },
-      default_strategy_code: null,
-      default_reason: null,
-      default_value_json: null,
-      created_at: '2026-06-02T00:00:00Z',
-      updated_at: '2026-06-02T00:00:00Z',
-    },
-    {
-      query_id: 'query-demo-default',
-      case_id: 'case-001',
-      patient_id: 'patient-001',
-      field_name: 'procalcitonin',
-      field_label: '降钙素原',
-      modality: 'lab',
-      reason: 'demo',
-      question_text: '请补充降钙素原值',
-      status: 'default_applied',
-      trace_id: 'trace-demo',
-      policy_version: 'v1',
-      value_source: 'default_applied',
-      doctor_answer_text: null,
-      doctor_answer_json: null,
-      default_strategy_code: 'demo_default',
-      default_reason: '演示默认策略',
-      default_value_json: { value: 'demo-default' },
-      created_at: '2026-06-02T00:00:00Z',
-      updated_at: '2026-06-02T00:00:00Z',
-    },
-  ],
-  recommendations: [
-    { recommendation_id: 'rec-001', title: '示例推荐结果', risk_score: 0.78, trace_id: 'trace-demo' },
-  ],
-  qualityReviews: [
-    {
-      review_id: 'review-demo-001',
-      case_id: 'case-001',
-      trace_id: 'trace-demo',
-      target_type: 'recommendation',
-      target_id: 'rec-001',
-      status: 'open',
-      attribution: 'human_feedback',
-      severity: 'medium',
-      summary: '示例质控审查',
-      related_feedback_id: 'feedback-demo-001',
-      opened_by: 'dev_doctor',
-      created_at: '2026-06-02T00:00:00Z',
-      updated_at: '2026-06-02T00:00:00Z',
-    },
-  ],
-};
 export type InferenceTaskPayload = {
   patient_id: string;
   disease_agent: string;
@@ -370,13 +227,6 @@ export type InferenceTaskResponse = {
   limitations?: unknown[];
   recommendation?: { evidence_refs?: unknown[] };
   model_service?: unknown;
-};
-
-export type LoginResponse = {
-  access_token: string;
-  refresh_token: string;
-  token_type?: string;
-  expires_in?: number;
 };
 
 export type MissingValueQuery = {
@@ -595,7 +445,13 @@ export type TraceEventItem = {
   };
 };
 
+
 export async function login(username: string, password: string): Promise<LoginResponse> {
+  if (API_MODE === 'mock') {
+    const data: LoginResponse = { access_token: 'mock-access-token', refresh_token: 'mock-refresh-token', token_type: 'Bearer', expires_in: 3600 };
+    saveAuthTokens(data.access_token, data.refresh_token);
+    return data;
+  }
   const data = (await client.post('/api/v1/auth/login', { username, password })).data as LoginResponse;
   if (data?.access_token && data?.refresh_token) {
     saveAuthTokens(data.access_token, data.refresh_token);
@@ -617,6 +473,11 @@ export async function logout() {
 }
 
 export async function getCurrentUser(): Promise<CurrentUser> {
+  if (API_MODE === 'mock') {
+    const user: CurrentUser = { user_id: 'user-dev-doctor', username: 'dev_doctor', display_name: 'Dev Doctor', role: 'doctor', is_active: true };
+    saveCurrentUser(user);
+    return user;
+  }
   const data = (await client.get('/api/v1/auth/me')).data as CurrentUser;
   saveCurrentUser(data);
   return data;
@@ -626,6 +487,11 @@ export async function refreshToken(): Promise<LoginResponse> {
   const rt = getRefreshToken();
   if (!rt) {
     throw new Error('missing_refresh_token');
+  }
+  if (API_MODE === 'mock') {
+    const data: LoginResponse = { access_token: 'mock-access-token', refresh_token: 'mock-refresh-token', token_type: 'Bearer', expires_in: 3600 };
+    saveAuthTokens(data.access_token, data.refresh_token);
+    return data;
   }
   const data = (await client.post('/api/v1/auth/refresh', { refresh_token: rt })).data as LoginResponse;
   if (data?.access_token && data?.refresh_token) {
@@ -640,7 +506,12 @@ export async function getHealthReady() {
 }
 
 export async function listPatients(): Promise<PatientItem[]> {
-  if (API_MODE === 'mock') return [];
+  if (API_MODE === 'mock') {
+    return [
+      { patient_id: 'patient-001', external_patient_id: 'P-001', display_name: 'Demo Patient 001', sex: 'male', birth_date: '1980-01-01', consent_status: 'unknown' },
+      { patient_id: 'patient-002', external_patient_id: 'P-002', display_name: 'Demo Patient 002', sex: 'female', birth_date: '1982-02-02', consent_status: 'unknown' },
+    ];
+  }
   const data = (await client.get('/api/v1/patients')).data;
   return unwrapList<PatientItem>(data);
 }
@@ -699,7 +570,7 @@ export async function createCaseImagingInput(caseId: string, payload: CaseImagin
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
-    (mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs = [item, ...((mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs || [])];
+    mock.imagingInputs = [item, ...mock.imagingInputs as CaseImagingInputItem[]];
     return item;
   }
   const data = (await client.post('/api/v1/cases/' + caseId + '/imaging-inputs', payload, withTraceId(payload.trace_id || undefined))).data;
@@ -708,25 +579,18 @@ export async function createCaseImagingInput(caseId: string, payload: CaseImagin
 
 export async function listCaseImagingInputs(caseId: string, limit: number = 20, offset: number = 0): Promise<CaseImagingInputListResponse> {
   if (API_MODE === 'mock') {
-    const items = ((mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs || []).filter((item) => item.case_id === caseId);
+    const items = mock.imagingInputs.filter((item) => item.case_id === caseId);
     return { status: 'ok', route: '/api/v1/cases/' + caseId + '/imaging-inputs', total: items.length, limit, offset, items: items.slice(offset, offset + limit) };
   }
   const data = (await client.get('/api/v1/cases/' + caseId + '/imaging-inputs', { params: { limit, offset } })).data;
   const items = unwrapList<CaseImagingInputItem>(data);
   const total = typeof data?.total === 'number' ? data.total : items.length;
-  return {
-    status: data?.status,
-    route: data?.route,
-    total,
-    limit,
-    offset,
-    items,
-  };
+  return { status: data?.status, route: data?.route, total, limit, offset, items };
 }
 
 export async function getCaseImagingInput(inputAssetId: string): Promise<CaseImagingInputItem> {
   if (API_MODE === 'mock') {
-    return ((mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs || []).find((item) => item.input_asset_id === inputAssetId) || {
+    return mock.imagingInputs.find((item) => item.input_asset_id === inputAssetId) || {
       input_asset_id: inputAssetId,
       case_id: 'case-001',
       patient_id: 'patient-001',
@@ -748,26 +612,23 @@ export async function getCaseImagingInput(inputAssetId: string): Promise<CaseIma
 
 export async function registerDicomSeries(caseId: string, payload: DicomSeriesRegisterPayload): Promise<DicomSeriesRegisterResponse> {
   if (API_MODE === 'mock') {
-    const item: DicomSeriesRegisterResponse = {
-      input_asset_id: 'dicom-demo-created',
-      case_id: caseId,
+    const item = await createCaseImagingInput(caseId, {
       patient_id: null,
       trace_id: null,
-      modality: 'dicom_series',
+      modality: 'CT',
       source_type: payload.source_type,
       storage_uri: payload.storage_uri || payload.dicom_series_ref,
       deidentified: payload.deidentified ?? true,
       not_for_diagnosis: payload.not_for_diagnosis ?? true,
-      provenance_json: payload.provenance_json || {},
+      provenance_json: payload.provenance_json || { series_label: payload.series_label, dicom_series_ref: payload.dicom_series_ref },
       quality_flags_json: payload.quality_flags_json || {},
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+    });
+    return {
+      ...item,
       source_format: 'dicom_series',
       preprocessed_format: 'nifti_nii_gz',
       preprocessing_status: 'pending',
     };
-    (mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs = [item, ...((mock as { imagingInputs?: CaseImagingInputItem[] }).imagingInputs || [])];
-    return item;
   }
   const data = (await client.post('/api/v1/cases/' + caseId + '/imaging-inputs/dicom-series', payload)).data;
   return unwrapItem<DicomSeriesRegisterResponse>(data);
@@ -787,11 +648,12 @@ export async function getImagingPreprocessingStatus(inputAssetId: string): Promi
       raw_output_file: 'raw_image.nii.gz',
       model_input_file: 'image.nii.gz',
       label_file: 'label.nii.gz',
-      preprocessing_status: 'pending',
+      preprocessing_status: 'not_implemented',
+      message: 'preprocessing_not_implemented',
     };
   }
   const data = (await client.get('/api/v1/imaging-inputs/' + inputAssetId + '/preprocessing-status')).data;
-  return unwrapItem<ImagingPreprocessingStatusResponse>(data);
+  return data as ImagingPreprocessingStatusResponse;
 }
 
 export async function requestImagingPreprocess(inputAssetId: string): Promise<ImagingPreprocessResponse> {
@@ -809,13 +671,186 @@ export async function requestImagingPreprocess(inputAssetId: string): Promise<Im
       model_input_file: 'image.nii.gz',
       label_file: 'label.nii.gz',
       preprocessing_status: 'not_implemented',
+      message: 'preprocessing_not_implemented',
       error_code: 'preprocessing_not_implemented',
-      message: '\u5f53\u524d\u4ec5\u4e3a contract placeholder\uff0c\u4e0d\u8fd0\u884c dcm2niix \u6216 N4\u3002',
     };
   }
   const data = (await client.post('/api/v1/imaging-inputs/' + inputAssetId + '/preprocess')).data;
-  return unwrapItem<ImagingPreprocessResponse>(data);
+  return data as ImagingPreprocessResponse;
 }
+
+
+export type PatientItem = {
+  patient_id: string;
+  external_patient_id?: string | null;
+  display_name?: string | null;
+  sex?: string | null;
+  birth_date?: string | null;
+  consent_status?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type PatientCreatePayload = {
+  external_patient_id?: string | null;
+  display_name?: string | null;
+  name?: string | null;
+  sex?: string | null;
+  birth_date?: string | null;
+  consent_status?: string;
+};
+
+export type CaseItem = {
+  case_id: string;
+  case_no?: string | null;
+  patient_id: string;
+  disease_task?: string | null;
+  status?: string | null;
+  trace_id?: string | null;
+  chief_complaint?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CaseCreatePayload = {
+  patient_id: string;
+  case_no?: string | null;
+  disease_task?: string | null;
+  status?: string | null;
+  chief_complaint?: string | null;
+};
+
+export type CaseImagingInputCreatePayload = {
+  patient_id?: string | null;
+  trace_id?: string | null;
+  modality: string;
+  source_type: string;
+  storage_uri: string;
+  deidentified?: boolean;
+  not_for_diagnosis?: boolean;
+  provenance_json?: Record<string, unknown> | null;
+  quality_flags_json?: Record<string, unknown> | null;
+};
+
+export type CaseImagingInputItem = {
+  input_asset_id: string;
+  case_id: string;
+  patient_id?: string | null;
+  trace_id?: string | null;
+  modality: string;
+  source_type: string;
+  storage_uri: string;
+  deidentified: boolean;
+  not_for_diagnosis: boolean;
+  provenance_json?: Record<string, unknown> | null;
+  quality_flags_json?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CaseImagingInputListResponse = {
+  status?: string;
+  route?: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: CaseImagingInputItem[];
+};
+
+export type DicomSeriesRegisterPayload = {
+  series_label: string;
+  source_type: string;
+  dicom_series_ref: string;
+  storage_uri?: string | null;
+  deidentified?: boolean;
+  not_for_diagnosis?: boolean;
+  provenance_json?: Record<string, unknown> | null;
+  quality_flags_json?: Record<string, unknown> | null;
+};
+
+export type DicomSeriesRegisterResponse = CaseImagingInputItem & {
+  source_format?: string | null;
+  preprocessed_format?: string | null;
+  preprocessing_status?: string | null;
+};
+
+export type ImagingPreprocessingStatusResponse = {
+  status?: string;
+  route?: string;
+  input_asset_id: string;
+  source_format?: string | null;
+  preprocessed_format?: string | null;
+  preprocessing_script?: string | null;
+  conversion_tool?: string | null;
+  bias_correction?: string | null;
+  raw_output_file?: string | null;
+  model_input_file?: string | null;
+  label_file?: string | null;
+  preprocessing_status?: string | null;
+  message?: string | null;
+};
+
+export type ImagingPreprocessResponse = ImagingPreprocessingStatusResponse & {
+  error_code?: string | null;
+};
+
+export type CapCopShadowWorkflowBranchReadiness = {
+  status?: string | null;
+  can_run?: boolean;
+  disabled_reasons?: string[];
+  required_inputs?: string[];
+  detected_inputs?: string[];
+  next_action?: string | null;
+};
+
+export type CapCopShadowWorkflowReadinessResponse = {
+  status?: string | null;
+  route?: string | null;
+  overall_status?: 'ready_all' | 'ready_partial' | 'blocked' | string | null;
+  branches: {
+    clinical_mlp?: CapCopShadowWorkflowBranchReadiness | null;
+    imaging_resnet18?: CapCopShadowWorkflowBranchReadiness | null;
+    multimodal_resnet18?: CapCopShadowWorkflowBranchReadiness | null;
+  };
+};
+
+export type CapCopShadowWorkflowBranchPlan = CapCopShadowWorkflowBranchReadiness & {
+  branch?: 'clinical_mlp' | 'imaging_resnet18' | 'multimodal_resnet18' | string;
+  status?: string | null;
+  planned_status?: string | null;
+  limitations?: unknown;
+  skipped_reason?: string | null;
+  shadow_run_id?: string | null;
+  output_id?: string | null;
+  candidate_label?: string | null;
+  prediction_probability_json?: Record<string, unknown> | null;
+  confidence_json?: unknown;
+  uncertainty_json?: unknown;
+  note?: string | null;
+};
+
+export type CapCopShadowWorkflowResponse = {
+  status?: string | null;
+  route?: string | null;
+  mode?: 'preview' | 'execute' | string | null;
+  overall_status?: string | null;
+  execution_plan?: {
+    overall_status?: string | null;
+    branches?: Record<string, CapCopShadowWorkflowBranchPlan> | CapCopShadowWorkflowBranchPlan[];
+    limitations?: unknown;
+  } | null;
+  branches?: Record<string, CapCopShadowWorkflowBranchPlan> | CapCopShadowWorkflowBranchPlan[];
+  plan?: {
+    overall_status?: string | null;
+    branches?: Record<string, CapCopShadowWorkflowBranchPlan> | CapCopShadowWorkflowBranchPlan[];
+    limitations?: unknown;
+  } | null;
+  result?: {
+    branches?: Record<string, CapCopShadowWorkflowBranchPlan> | CapCopShadowWorkflowBranchPlan[];
+  } | null;
+  message?: string | null;
+  error_code?: string | null;
+};
 
 export async function getCapCopShadowWorkflowReadiness(caseId: string): Promise<CapCopShadowWorkflowReadinessResponse> {
   if (API_MODE === 'mock') {
@@ -824,9 +859,9 @@ export async function getCapCopShadowWorkflowReadiness(caseId: string): Promise<
       status: 'ready',
       can_run: true,
       disabled_reasons: [],
-      required_inputs: ['clinical artifact-order snapshot', '\u9700\u8981\u9884\u5904\u7406\u540e\u7684 image.nii.gz'],
+      required_inputs: ['clinical artifact-order snapshot', '需要预处理后的 image.nii.gz'],
       detected_inputs: ['ready_for_inference snapshot', 'NIfTI / synthetic imaging input'],
-      next_action: '\u8fdb\u5165\u75c5\u4f8b\u5de5\u4f5c\u53f0\u7684\u8f93\u5165\u6570\u636e\u533a\u57df',
+      next_action: '进入病例工作台的输入数据区域',
     };
     return {
       status: ready ? 'ready_all' : 'blocked',
@@ -842,32 +877,107 @@ export async function getCapCopShadowWorkflowReadiness(caseId: string): Promise<
             clinical_mlp: {
               status: 'blocked',
               can_run: false,
-              disabled_reasons: ['\u4e34\u5e8a 36 \u7279\u5f81\u5c1a\u672a\u5b8c\u6210 artifact-order \u6620\u5c04'],
+              disabled_reasons: ['临床 36 特征尚未完成 artifact-order 映射'],
               required_inputs: ['36-feature artifact-order snapshot'],
               detected_inputs: [],
-              next_action: '\u8fdb\u5165 /cases/' + caseId + '/model-input',
+              next_action: '进入 /cases/' + caseId + '/model-input',
             },
             imaging_resnet18: {
               status: 'blocked',
               can_run: false,
-              disabled_reasons: ['\u5f71\u50cf\u8f93\u5165\u5c1a\u672a\u5b8c\u6210\u9884\u5904\u7406'],
+              disabled_reasons: ['影像输入尚未完成预处理'],
               required_inputs: ['image.nii.gz'],
               detected_inputs: [],
-              next_action: '\u8fdb\u5165 /cases/' + caseId + '/imaging-inputs',
+              next_action: '进入 /cases/' + caseId + '/imaging-inputs',
             },
             multimodal_resnet18: {
               status: 'blocked',
               can_run: false,
-              disabled_reasons: ['multimodal \u9700\u8981\u540c\u65f6\u5177\u5907\u4e34\u5e8a\u548c\u5f71\u50cf\u8f93\u5165'],
+              disabled_reasons: ['multimodal 需要同时具备临床和影像输入'],
               required_inputs: ['clinical snapshot', 'image.nii.gz'],
               detected_inputs: [],
-              next_action: '\u5148\u8865\u9f50\u4e34\u5e8a\u548c\u5f71\u50cf\u8f93\u5165',
+              next_action: '先补齐临床和影像输入',
             },
           },
     };
   }
   const data = (await client.get('/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow-readiness')).data;
   return data as CapCopShadowWorkflowReadinessResponse;
+}
+
+function buildWorkflowPlanBranch(key: string, branch: CapCopShadowWorkflowBranchReadiness | CapCopShadowWorkflowBranchPlan | null | undefined, mode: 'preview' | 'execute') {
+  const canRun = !!branch?.can_run;
+  const disabledReasons = branch?.disabled_reasons || [];
+  const detectedInputs = branch?.detected_inputs || [];
+  const requiredInputs = branch?.required_inputs || [];
+  const status = branch?.status || (canRun ? (mode === 'preview' ? 'planned' : 'executed') : 'skipped');
+  const reason = (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.skipped_reason || disabledReasons[0] || (canRun ? null : 'branch blocked');
+  return {
+    branch: key,
+    status,
+    can_run: canRun,
+    disabled_reasons: disabledReasons,
+    required_inputs: requiredInputs,
+    detected_inputs: detectedInputs,
+    next_action: branch?.next_action || null,
+    limitations: (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.limitations || disabledReasons,
+    skipped_reason: reason || null,
+    shadow_run_id: (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.shadow_run_id || null,
+    output_id: (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.output_id || null,
+    candidate_label: (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.candidate_label || null,
+    prediction_probability_json: (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.prediction_probability_json || null,
+    confidence_json: (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.confidence_json ?? null,
+    uncertainty_json: (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.uncertainty_json ?? null,
+    note: (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.note || null,
+    planned_status: (branch as CapCopShadowWorkflowBranchPlan | null | undefined)?.planned_status || null,
+  };
+}
+
+function buildWorkflowPlanResponse(caseId: string, readiness: CapCopShadowWorkflowReadinessResponse, mode: 'preview' | 'execute'): CapCopShadowWorkflowResponse {
+  const branches = readiness.branches || {};
+  const previewBranches = {
+    clinical_mlp: buildWorkflowPlanBranch('clinical_mlp', branches.clinical_mlp, mode),
+    imaging_resnet18: buildWorkflowPlanBranch('imaging_resnet18', branches.imaging_resnet18, mode),
+    multimodal_resnet18: buildWorkflowPlanBranch('multimodal_resnet18', branches.multimodal_resnet18, mode),
+  };
+  return {
+    status: 'ok',
+    route: '/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow',
+    mode,
+    overall_status: readiness.overall_status || null,
+    execution_plan: {
+      overall_status: readiness.overall_status || null,
+      branches: previewBranches,
+      limitations: [],
+    },
+    branches: previewBranches,
+    plan: {
+      overall_status: readiness.overall_status || null,
+      branches: previewBranches,
+      limitations: [],
+    },
+    result: {
+      branches: previewBranches,
+    },
+  };
+}
+
+export async function previewCapCopShadowWorkflow(caseId: string, payload: Record<string, unknown> = {}): Promise<CapCopShadowWorkflowResponse> {
+  if (API_MODE === 'mock') {
+    const readiness = await getCapCopShadowWorkflowReadiness(caseId);
+    return buildWorkflowPlanResponse(caseId, readiness, 'preview');
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow', { ...payload, mode: 'preview' })).data;
+  return data as CapCopShadowWorkflowResponse;
+}
+
+export async function executeCapCopShadowWorkflow(caseId: string, payload: Record<string, unknown>): Promise<CapCopShadowWorkflowResponse> {
+  if (API_MODE === 'mock') {
+    const readiness = await getCapCopShadowWorkflowReadiness(caseId);
+    return buildWorkflowPlanResponse(caseId, readiness, 'execute');
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow', { ...payload, mode: 'execute' })).data;
+  return data as CapCopShadowWorkflowResponse;
 }
 
 export async function listMissingValueQueries(caseId: string, traceId?: string): Promise<MissingValueListResponse> {
@@ -1861,7 +1971,7 @@ export async function getShadowRunOutputs(shadowRunId: string): Promise<ShadowIn
     };
   }
   const data = (await client.get('/api/v1/shadow-inference-runs/' + shadowRunId + '/outputs')).data;
-  const items = unwrapList<ShadowInferenceRunOutputItem>(data).map(enrichShadowRunOutputItem);
+  const items = unwrapList<ShadowInferenceRunOutputItem>(data);
   const total = typeof data?.total === 'number' ? data.total : items.length;
   return { items, total };
 }
