@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -34,6 +37,11 @@ PREVIEW_LIMITATIONS = [
     'no_trace_or_evidence',
 ]
 
+MULTIMODAL_CLINICAL_FEATURE_COLUMNS_PATH = Path(
+    '/srv/medorion/models/agents/cap_cop_classifier_agent/v1.0.0/'
+    'multimodal_resnet18_bigdata/preprocess_artifacts/clinical_tabular_standardization_v1.json'
+)
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -65,6 +73,151 @@ def _latest_ready_snapshot(db: Session, case_id: UUID) -> CaseModelInputSnapshot
             CaseModelInputSnapshot.id.desc(),
         )
     ).scalars().first()
+
+
+@lru_cache(maxsize=1)
+def _multimodal_runner_feature_columns() -> list[str]:
+    if not MULTIMODAL_CLINICAL_FEATURE_COLUMNS_PATH.exists():
+        raise RuntimeError(f"artifact_missing: {MULTIMODAL_CLINICAL_FEATURE_COLUMNS_PATH}")
+    payload = json.loads(MULTIMODAL_CLINICAL_FEATURE_COLUMNS_PATH.read_text(encoding='utf-8'))
+    feature_columns = payload.get('feature_columns')
+    if not isinstance(feature_columns, list) or len(feature_columns) != 36:
+        raise RuntimeError('multimodal_clinical_schema_unverified: feature_columns must contain 36 entries')
+    return [str(value) for value in feature_columns]
+
+
+def _coerce_multimodal_numeric_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        for separator in (' ', ',', ';', '\t'):
+            normalized = normalized.replace(separator, ' ')
+        token = normalized.split(' ', 1)[0]
+        try:
+            return float(token)
+        except ValueError:
+            return None
+    return None
+
+
+def _multimodal_clinical_payload_contract(snapshot: CaseModelInputSnapshot | None) -> dict[str, Any]:
+    required_inputs = [
+        'clinical_snapshot_ready_for_inference',
+        'current_assessment_status=ready_for_inference',
+        'not_for_diagnosis=true',
+        'runtime_stub=true',
+        'artifact_order=clinical_tabular_standardization_v1.json',
+        'full_36_feature_payload',
+        'Striated_shadow.1',
+        'no_alias_or_default_fallback',
+    ]
+    detected_inputs: dict[str, Any] = {
+        'selected_snapshot': _snapshot_summary(snapshot),
+        'feature_order_source': str(MULTIMODAL_CLINICAL_FEATURE_COLUMNS_PATH),
+        'translation_mode': 'strict_exact_artifact_order',
+        'default_fallback_allowed': False,
+        'alias_mapping_allowed': False,
+        'feature_count': 0,
+        'missing_required_features': [],
+        'invalid_numeric_features': [],
+        'extra_snapshot_features': [],
+        'runner_feature_values': {},
+    }
+    if snapshot is None:
+        return {
+            'ready': False,
+            'status': BRANCH_STATUS_UNAVAILABLE,
+            'disabled_reasons': ['missing_snapshot'],
+            'required_inputs': required_inputs,
+            'detected_inputs': detected_inputs,
+            'next_action': 'create_controlled_clinical_snapshot',
+        }
+
+    validation_status = str(snapshot.validation_status or '').strip().lower()
+    assessment_status = str(snapshot.current_assessment_status or '').strip().lower()
+    reasons: list[str] = []
+    if validation_status == 'schema_unverified' or assessment_status == 'schema_unverified':
+        reasons.append('multimodal_clinical_schema_unverified')
+    if validation_status != 'ready_for_inference' or assessment_status != 'ready_for_inference':
+        reasons.append('clinical_input_insufficient')
+    if not bool(snapshot.not_for_diagnosis):
+        reasons.append('not_for_diagnosis_false')
+    if not bool(snapshot.runtime_stub):
+        reasons.append('runtime_safety_not_ready')
+
+    try:
+        feature_columns = _multimodal_runner_feature_columns()
+    except RuntimeError as exc:
+        detected_inputs['artifact_error'] = str(exc)
+        return {
+            'ready': False,
+            'status': BRANCH_STATUS_SCHEMA_UNVERIFIED,
+            'disabled_reasons': ['multimodal_clinical_schema_unverified'],
+            'required_inputs': required_inputs,
+            'detected_inputs': detected_inputs,
+            'next_action': 'refresh_clinical_validation',
+        }
+
+    mapped = snapshot.mapped_features_json if isinstance(snapshot.mapped_features_json, dict) else {}
+    if not mapped:
+        reasons.append('clinical_input_insufficient')
+    missing = [feature_name for feature_name in feature_columns if feature_name not in mapped]
+    if missing:
+        reasons.append('clinical_input_insufficient')
+    invalid: list[str] = []
+    runner_values: dict[str, float] = {}
+    for feature_name in feature_columns:
+        numeric_value = _coerce_multimodal_numeric_value(mapped.get(feature_name))
+        if numeric_value is None:
+            invalid.append(feature_name)
+            continue
+        runner_values[feature_name] = float(numeric_value)
+    if invalid:
+        reasons.append('clinical_input_insufficient')
+    extra = [feature_name for feature_name in mapped if feature_name not in feature_columns]
+    if extra:
+        reasons.append('multimodal_clinical_schema_unverified')
+
+    detected_inputs.update({
+        'feature_order': feature_columns,
+        'feature_count': len(feature_columns),
+        'missing_required_features': missing,
+        'invalid_numeric_features': invalid,
+        'extra_snapshot_features': extra,
+        'runner_feature_values': runner_values,
+        'snapshot_validation_status': snapshot.validation_status,
+        'snapshot_current_assessment_status': snapshot.current_assessment_status,
+        'snapshot_not_for_diagnosis': bool(snapshot.not_for_diagnosis),
+        'snapshot_runtime_stub': bool(snapshot.runtime_stub),
+    })
+
+    reasons = list(dict.fromkeys(reasons))
+    ready = not reasons
+    if ready:
+        status = BRANCH_STATUS_READY
+        next_action = 'launch_multimodal_resnet18_shadow'
+    elif 'multimodal_clinical_schema_unverified' in reasons:
+        status = BRANCH_STATUS_SCHEMA_UNVERIFIED
+        next_action = 'refresh_clinical_validation'
+    else:
+        status = BRANCH_STATUS_BLOCKED
+        next_action = 'repair_clinical_snapshot_payload'
+
+    return {
+        'ready': ready,
+        'status': status,
+        'disabled_reasons': reasons,
+        'required_inputs': required_inputs,
+        'detected_inputs': detected_inputs,
+        'next_action': next_action,
+    }
 
 
 def _latest_imaging_input(db: Session, case_id: UUID) -> CaseImagingInput | None:
@@ -319,13 +472,37 @@ def _imaging_branch(db: Session, case_id: UUID) -> dict[str, Any]:
     }
 
 
-def _multimodal_branch(clinical: dict[str, Any], imaging: dict[str, Any]) -> dict[str, Any]:
+def _multimodal_branch(db: Session, case_id: UUID, clinical: dict[str, Any], imaging: dict[str, Any]) -> dict[str, Any]:
     required_inputs = [
         'clinical_mlp_branch_ready',
         'imaging_resnet18_branch_ready',
         'same_case_scope',
+        'clinical_snapshot_ready_for_inference',
+        'current_assessment_status=ready_for_inference',
+        'not_for_diagnosis=true',
+        'full_36_feature_payload',
+        'Striated_shadow.1',
+        'strict_artifact_order=clinical_tabular_standardization_v1.json',
     ]
+    clinical_snapshot = _latest_ready_snapshot(db, case_id)
     if clinical['can_run'] and imaging['can_run']:
+        contract = _multimodal_clinical_payload_contract(clinical_snapshot)
+        if not contract['ready']:
+            reasons = list(contract['disabled_reasons'] or ['clinical_input_insufficient'])
+            return {
+                'branch_name': MULTIMODAL_BRANCH_NAME,
+                'status': contract['status'] if contract['status'] in {BRANCH_STATUS_SCHEMA_UNVERIFIED, BRANCH_STATUS_BLOCKED, BRANCH_STATUS_UNAVAILABLE} else BRANCH_STATUS_BLOCKED,
+                'can_run': False,
+                'disabled_reasons': reasons,
+                'required_inputs': required_inputs,
+                'detected_inputs': {
+                    'clinical': clinical['detected_inputs'],
+                    'imaging': imaging['detected_inputs'],
+                    'clinical_contract': contract['detected_inputs'],
+                    'same_case': True,
+                },
+                'next_action': contract['next_action'],
+            }
         return {
             'branch_name': MULTIMODAL_BRANCH_NAME,
             'status': BRANCH_STATUS_READY,
@@ -335,6 +512,7 @@ def _multimodal_branch(clinical: dict[str, Any], imaging: dict[str, Any]) -> dic
             'detected_inputs': {
                 'clinical': clinical['detected_inputs'],
                 'imaging': imaging['detected_inputs'],
+                'clinical_contract': contract['detected_inputs'],
                 'same_case': True,
             },
             'next_action': 'launch_multimodal_resnet18_shadow',
@@ -362,6 +540,7 @@ def _multimodal_branch(clinical: dict[str, Any], imaging: dict[str, Any]) -> dic
         'detected_inputs': {
             'clinical': clinical['detected_inputs'],
             'imaging': imaging['detected_inputs'],
+            'clinical_contract': _multimodal_clinical_payload_contract(clinical_snapshot)['detected_inputs'] if clinical_snapshot is not None else {},
             'same_case': True,
         },
         'next_action': next_action,
@@ -372,7 +551,7 @@ def build_cap_cop_shadow_workflow_readiness(db: Session, case_id: UUID, actor: A
     case = require_case_access(db, actor, case_id, access_level='summary')
     clinical = _clinical_branch(db, case.id)
     imaging = _imaging_branch(db, case.id)
-    multimodal = _multimodal_branch(clinical, imaging)
+    multimodal = _multimodal_branch(db, case.id, clinical, imaging)
     branches = {
         CLINICAL_BRANCH_NAME: clinical,
         IMAGING_BRANCH_NAME: imaging,

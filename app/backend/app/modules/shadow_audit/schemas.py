@@ -266,3 +266,39 @@ class CapCopShadowWorkflowReadinessResponseV1(BaseModel):
     branches: dict[str, CapCopShadowWorkflowBranchReadinessItemV1] = Field(default_factory=dict)
     checked_at: datetime | None = None
     limitations: list[str] = Field(default_factory=list)
+
+
+class CapCopShadowWorkflowRequestV1(BaseModel):
+    mode: Literal['preview', 'execute']
+    requested_branches: list[Literal['clinical_mlp', 'imaging_resnet18', 'multimodal_resnet18']] = Field(default_factory=list)
+    dry_run_label: str | None = None
+    not_for_diagnosis: Literal[True] = True
+    shadow_only: Literal[True] = True
+
+
+class CapCopShadowWorkflowBranchExecutionItemV1(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    branch: Literal['clinical_mlp', 'imaging_resnet18', 'multimodal_resnet18']
+    status: Literal['planned', 'executed', 'skipped', 'failed']
+    shadow_run_id: str | None = None
+    output_id: str | None = None
+    candidate_label: str | None = None
+    probabilities: dict[str, Any] = Field(default_factory=dict)
+    disabled_reasons: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class CapCopShadowWorkflowRunResponseV1(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str = 'ok'
+    route: str
+    workflow_run_id: str
+    mode: Literal['preview', 'execute']
+    overall_status: Literal['ready_partial', 'ready_all', 'blocked']
+    case_id: UUID
+    patient_id: UUID
+    branches: list[CapCopShadowWorkflowBranchExecutionItemV1] = Field(default_factory=list)
+    checked_at: datetime | None = None
+    limitations: list[str] = Field(default_factory=list)

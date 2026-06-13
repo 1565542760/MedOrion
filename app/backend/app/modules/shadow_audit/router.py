@@ -31,7 +31,10 @@ from app.modules.shadow_audit.schemas import (
     ShadowInferenceRunListResponseV1,
     CapCopShadowWorkflowBranchReadinessItemV1,
     CapCopShadowWorkflowReadinessResponseV1,
+    CapCopShadowWorkflowRequestV1,
+    CapCopShadowWorkflowRunResponseV1,
 )
+from app.modules.shadow_audit.workflow_orchestration import run_cap_cop_shadow_workflow
 from app.modules.shadow_audit.clinical_mlp import run_cap_cop_clinical_mlp_fold5_one_shot_shadow
 from app.modules.shadow_audit.multimodal_resnet18 import run_controlled_multimodal_resnet18_one_shot_shadow
 from app.modules.shadow_audit.imaging_resnet18 import run_controlled_imaging_resnet18_one_shot_shadow
@@ -243,6 +246,26 @@ def get_cap_cop_shadow_workflow_readiness(
         checked_at=datetime.fromisoformat(result['checked_at']),
         limitations=list(result['limitations']),
     )
+
+
+@router.post('/cases/{case_id}/cap-cop-shadow/workflow', response_model=CapCopShadowWorkflowRunResponseV1)
+def run_cap_cop_shadow_workflow_endpoint(
+    case_id: str,
+    payload: CapCopShadowWorkflowRequestV1,
+    db: Session = Depends(get_db),
+    actor: User = Depends(one_shot_guard),
+) -> CapCopShadowWorkflowRunResponseV1:
+    result = run_cap_cop_shadow_workflow(db, case_id, actor, payload)
+    db.commit()
+    return CapCopShadowWorkflowRunResponseV1.model_validate(
+        {
+            'status': 'ok',
+            'route': f'/api/v1/cases/{case_id}/cap-cop-shadow/workflow',
+            **result,
+        }
+    )
+
+
 
 
 @router.get('/shadow-inference-runs/{shadow_run_id}', response_model=ShadowInferenceRunDetailResponseV1)
