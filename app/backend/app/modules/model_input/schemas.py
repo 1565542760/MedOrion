@@ -311,3 +311,40 @@ class ClinicalTableStrictValidationResponseV1(BaseModel):
     runtime_stub: bool = True
     limitations: list[str] = Field(default_factory=list)
 
+
+
+class ClinicalTableControlledSnapshotCreateRequestV1(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    raw_columns: list[str] = Field(default_factory=list, min_length=1)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    sample_row: dict[str, Any] = Field(default_factory=dict)
+    source_type: Literal['csv_paste', 'csv_upload_metadata', 'manual_entry']
+    trace_id: str | None = None
+    not_for_diagnosis: bool = True
+    shadow_only: bool = True
+
+
+class ClinicalTableControlledSnapshotCreateResponseV1(BaseModel):
+    status: str = 'ok'
+    route: str
+    artifact_id: str
+    artifact_ref: str
+    artifact_feature_count: int
+    artifact_feature_order: list[str] = Field(default_factory=list)
+    validation_status: Literal['ready_for_inference', 'schema_unverified', 'insufficient_data_for_assessment']
+    can_create_snapshot: bool = False
+    order_matches_artifact: bool = False
+    failure_reasons: list[str] = Field(default_factory=list)
+    source_type: str
+    row_count: int = 0
+    not_for_diagnosis: bool = True
+    shadow_only: bool = True
+    runtime_stub: bool = True
+    snapshot_created: bool = False
+    snapshot: ModelInputSnapshotItemV1 | None = None
+    mapped_features: dict[str, Any] = Field(default_factory=dict)
+    source_refs: list[Any] = Field(default_factory=list)
+    doctor_provided_features: list[Any] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+

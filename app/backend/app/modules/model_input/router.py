@@ -36,6 +36,10 @@ from app.modules.model_input.schemas import (
     ClinicalTableStrictTypeCoercionItemV1,
     ClinicalTableStrictValidationRequestV1,
     ClinicalTableStrictValidationResponseV1,
+    ClinicalTableControlledSnapshotCreateRequestV1,
+    ClinicalTableControlledSnapshotCreateResponseV1,
+    ClinicalTableControlledSnapshotCreateRequestV1,
+    ClinicalTableControlledSnapshotCreateResponseV1,
     ModelMissingRequiredFeatureItemV1,
     ModelSelectionCandidateItemV1,
     ModelSelectionPreviewRequestV1,
@@ -748,6 +752,8 @@ def list_trace_model_input_snapshots(trace_id: str, limit: int = Query(20, ge=1,
 STRICT_CLINICAL_TABLE_ARTIFACT_PATH = Path('/srv/medorion/models/agents/cap_cop_classifier_agent/v1.0.0/multimodal_resnet18_bigdata/preprocess_artifacts/clinical_tabular_standardization_v1.json')
 STRICT_CLINICAL_TABLE_ARTIFACT_ID = 'clinical_tabular_standardization_v1'
 STRICT_CLINICAL_TABLE_ALLOWED_SOURCE_TYPES = {'csv_paste', 'csv_upload_metadata', 'manual_entry'}
+STRICT_CLINICAL_TABLE_MODEL_VERSION_ID = UUID('b12f315a-7f44-491d-bf46-b0da73f6da03')
+
 STRICT_CLINICAL_TABLE_LIMITATIONS = [
     'strict_artifact_order_validation',
     'no_alias_default_fallback',
@@ -996,6 +1002,53 @@ def _build_strict_clinical_table_validation(
     )
 
 
+
+
+def _strict_clinical_table_snapshot_mapped_features(feature_mappings: list[ClinicalTableStrictFeatureMappingItemV1]) -> dict[str, Any]:
+    mapped: dict[str, Any] = {}
+    for item in feature_mappings:
+        if item.coercion_status == 'ok':
+            mapped[item.model_feature_name] = item.coerced_value
+    return mapped
+
+
+def _strict_clinical_table_snapshot_source_refs(
+    *,
+    source_type: str,
+    row_count: int,
+    artifact_ref: str,
+    artifact_order: list[str],
+    validation_status: str,
+    order_matches_artifact: bool,
+    failure_reasons: list[str],
+    trace_id: str | None,
+    feature_mappings: list[ClinicalTableStrictFeatureMappingItemV1],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    source_refs = [
+        {
+            'source_type': source_type,
+            'row_count': row_count,
+            'artifact_ref': artifact_ref,
+            'artifact_feature_count': len(artifact_order),
+            'validation_status': validation_status,
+            'order_matches_artifact': order_matches_artifact,
+            'failure_reasons': list(failure_reasons),
+            'trace_id': trace_id,
+        }
+    ]
+    doctor_provided_features = [
+        {
+            'feature_order': item.feature_order,
+            'feature_name': item.model_feature_name,
+            'source_column': item.raw_column or item.model_feature_name,
+            'coercion_status': item.coercion_status,
+            'source_type': source_type,
+        }
+        for item in feature_mappings
+    ]
+    return source_refs, doctor_provided_features
+
+
 @router.post('/cases/{case_id}/model-input/clinical-table/validate', response_model=ClinicalTableStrictValidationResponseV1)
 def validate_clinical_table_input(case_id: str, payload: ClinicalTableStrictValidationRequestV1, db: Session = Depends(get_db), actor: User = Depends(snapshot_write_guard)) -> ClinicalTableStrictValidationResponseV1:
     if payload.source_type not in STRICT_CLINICAL_TABLE_ALLOWED_SOURCE_TYPES:
@@ -1042,3 +1095,131 @@ def validate_clinical_table_input(case_id: str, payload: ClinicalTableStrictVali
         runtime_stub=True,
         limitations=list(STRICT_CLINICAL_TABLE_LIMITATIONS),
     )
+
+
+@router.post('/cases/{case_id}/model-input/clinical-table/snapshots', response_model=ClinicalTableControlledSnapshotCreateResponseV1)
+def create_clinical_table_snapshot_from_validation(
+    case_id: str,
+    payload: ClinicalTableControlledSnapshotCreateRequestV1,
+    db: Session = Depends(get_db),
+    actor: User = Depends(snapshot_write_guard),
+) -> ClinicalTableControlledSnapshotCreateResponseV1:
+    if payload.source_type not in STRICT_CLINICAL_TABLE_ALLOWED_SOURCE_TYPES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'invalid_source_type', 'message': 'source_type must be csv_paste, csv_upload_metadata, or manual_entry'})
+    if payload.not_for_diagnosis is not True:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'not_for_diagnosis_required', 'message': 'not_for_diagnosis must be true'})
+    if payload.shadow_only is not True:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'shadow_only_required', 'message': 'shadow_only must be true'})
+
+    resolved_case_id, resolved_patient_id = _resolve_case(db, case_id)
+    require_case_access(db, actor, resolved_case_id, access_level='detail')
+
+    rows = _strict_clinical_table_request_rows(payload)
+    artifact_order = _strict_clinical_table_feature_order()
+    (
+        feature_mappings,
+        coercion_results,
+        missing_required_features,
+        extra_raw_columns,
+        can_create_snapshot,
+        order_matches_artifact,
+        validation_status,
+        failure_reasons,
+    ) = _build_strict_clinical_table_validation(raw_columns=list(payload.raw_columns), rows=rows)
+
+    if validation_status != 'ready_for_inference' or not can_create_snapshot:
+        return ClinicalTableControlledSnapshotCreateResponseV1(
+            route=f'/api/v1/cases/{case_id}/model-input/clinical-table/snapshots',
+            artifact_id=STRICT_CLINICAL_TABLE_ARTIFACT_ID,
+            artifact_ref=str(STRICT_CLINICAL_TABLE_ARTIFACT_PATH),
+            artifact_feature_count=len(artifact_order),
+            artifact_feature_order=artifact_order,
+            validation_status=validation_status,
+            can_create_snapshot=False,
+            order_matches_artifact=order_matches_artifact,
+            failure_reasons=failure_reasons,
+            source_type=payload.source_type,
+            row_count=len(rows),
+            not_for_diagnosis=True,
+            shadow_only=True,
+            runtime_stub=True,
+            snapshot_created=False,
+            snapshot=None,
+            mapped_features=_strict_clinical_table_snapshot_mapped_features(feature_mappings),
+            source_refs=[
+                {
+                    'source_type': payload.source_type,
+                    'row_count': len(rows),
+                    'artifact_ref': str(STRICT_CLINICAL_TABLE_ARTIFACT_PATH),
+                    'validation_status': validation_status,
+                    'failure_reasons': failure_reasons,
+                }
+            ],
+            doctor_provided_features=[],
+            limitations=list(STRICT_CLINICAL_TABLE_LIMITATIONS),
+        )
+
+    mapped_features = _strict_clinical_table_snapshot_mapped_features(feature_mappings)
+    source_refs, doctor_provided_features = _strict_clinical_table_snapshot_source_refs(
+        source_type=payload.source_type,
+        row_count=len(rows),
+        artifact_ref=str(STRICT_CLINICAL_TABLE_ARTIFACT_PATH),
+        artifact_order=artifact_order,
+        validation_status=validation_status,
+        order_matches_artifact=order_matches_artifact,
+        failure_reasons=failure_reasons,
+        trace_id=payload.trace_id,
+        feature_mappings=feature_mappings,
+    )
+    snapshot = CaseModelInputSnapshot(
+        input_snapshot_id=f'snap_{uuid4().hex[:16]}',
+        case_id=resolved_case_id,
+        patient_id=resolved_patient_id,
+        trace_id=(payload.trace_id or f'clinical_csv_{uuid4().hex[:12]}').strip(),
+        model_version_id=_snapshot_model_version_row(db, STRICT_CLINICAL_TABLE_MODEL_VERSION_ID)[1].id,
+        model_input_schema_id='clinical_mlp_cap_cop_input_schema_v1',
+        disease_task_feature_set_id='cap_cop_clinical_feature_set_v1',
+        preprocess_artifact_ref=str(STRICT_CLINICAL_TABLE_ARTIFACT_PATH),
+        mapped_features_json=mapped_features,
+        missing_features_json=[],
+        defaulted_features_json=[],
+        doctor_provided_features_json=doctor_provided_features,
+        source_refs_json=source_refs,
+        validation_status='ready_for_inference',
+        current_assessment_status='ready_for_inference',
+        insufficient_data_for_assessment=False,
+        runtime_stub=True,
+        not_for_diagnosis=True,
+    )
+
+    try:
+        db.add(snapshot)
+        db.commit()
+        db.refresh(snapshot)
+    except Exception:
+        db.rollback()
+        raise
+
+    return ClinicalTableControlledSnapshotCreateResponseV1(
+        route=f'/api/v1/cases/{case_id}/model-input/clinical-table/snapshots',
+        artifact_id=STRICT_CLINICAL_TABLE_ARTIFACT_ID,
+        artifact_ref=str(STRICT_CLINICAL_TABLE_ARTIFACT_PATH),
+        artifact_feature_count=len(artifact_order),
+        artifact_feature_order=artifact_order,
+        validation_status='ready_for_inference',
+        can_create_snapshot=True,
+        order_matches_artifact=True,
+        failure_reasons=[],
+        source_type=payload.source_type,
+        row_count=len(rows),
+        not_for_diagnosis=True,
+        shadow_only=True,
+        runtime_stub=True,
+        snapshot_created=True,
+        snapshot=_snapshot_item_from_row(snapshot),
+        mapped_features=mapped_features,
+        source_refs=source_refs,
+        doctor_provided_features=doctor_provided_features,
+        limitations=list(STRICT_CLINICAL_TABLE_LIMITATIONS),
+    )
+
