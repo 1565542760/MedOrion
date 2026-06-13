@@ -150,6 +150,26 @@ export type ImagingPreprocessResponse = ImagingPreprocessingStatusResponse & {
   error_code?: string | null;
 };
 
+export type CapCopShadowWorkflowBranchReadiness = {
+  status?: string | null;
+  can_run?: boolean;
+  disabled_reasons?: string[];
+  required_inputs?: string[];
+  detected_inputs?: string[];
+  next_action?: string | null;
+};
+
+export type CapCopShadowWorkflowReadinessResponse = {
+  status?: string | null;
+  route?: string | null;
+  overall_status?: 'ready_all' | 'ready_partial' | 'blocked' | string | null;
+  branches: {
+    clinical_mlp?: CapCopShadowWorkflowBranchReadiness | null;
+    imaging_resnet18?: CapCopShadowWorkflowBranchReadiness | null;
+    multimodal_resnet18?: CapCopShadowWorkflowBranchReadiness | null;
+  };
+};
+
 
 export type CurrentUser = {
   user_id: string;
@@ -790,11 +810,64 @@ export async function requestImagingPreprocess(inputAssetId: string): Promise<Im
       label_file: 'label.nii.gz',
       preprocessing_status: 'not_implemented',
       error_code: 'preprocessing_not_implemented',
-      message: '当前仅为 contract placeholder，不运行 dcm2niix 或 N4。',
+      message: '\u5f53\u524d\u4ec5\u4e3a contract placeholder\uff0c\u4e0d\u8fd0\u884c dcm2niix \u6216 N4\u3002',
     };
   }
   const data = (await client.post('/api/v1/imaging-inputs/' + inputAssetId + '/preprocess')).data;
   return unwrapItem<ImagingPreprocessResponse>(data);
+}
+
+export async function getCapCopShadowWorkflowReadiness(caseId: string): Promise<CapCopShadowWorkflowReadinessResponse> {
+  if (API_MODE === 'mock') {
+    const ready = caseId === 'case-001';
+    const branchReady: CapCopShadowWorkflowBranchReadiness = {
+      status: 'ready',
+      can_run: true,
+      disabled_reasons: [],
+      required_inputs: ['clinical artifact-order snapshot', '\u9700\u8981\u9884\u5904\u7406\u540e\u7684 image.nii.gz'],
+      detected_inputs: ['ready_for_inference snapshot', 'NIfTI / synthetic imaging input'],
+      next_action: '\u8fdb\u5165\u75c5\u4f8b\u5de5\u4f5c\u53f0\u7684\u8f93\u5165\u6570\u636e\u533a\u57df',
+    };
+    return {
+      status: ready ? 'ready_all' : 'blocked',
+      route: '/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow-readiness',
+      overall_status: ready ? 'ready_all' : 'blocked',
+      branches: ready
+        ? {
+            clinical_mlp: { ...branchReady, detected_inputs: ['ready_for_inference snapshot', '36-feature artifact-order snapshot'] },
+            imaging_resnet18: { ...branchReady, detected_inputs: ['preprocessed image.nii.gz', 'preprocessing_status=completed'] },
+            multimodal_resnet18: { ...branchReady, detected_inputs: ['clinical + imaging both ready'] },
+          }
+        : {
+            clinical_mlp: {
+              status: 'blocked',
+              can_run: false,
+              disabled_reasons: ['\u4e34\u5e8a 36 \u7279\u5f81\u5c1a\u672a\u5b8c\u6210 artifact-order \u6620\u5c04'],
+              required_inputs: ['36-feature artifact-order snapshot'],
+              detected_inputs: [],
+              next_action: '\u8fdb\u5165 /cases/' + caseId + '/model-input',
+            },
+            imaging_resnet18: {
+              status: 'blocked',
+              can_run: false,
+              disabled_reasons: ['\u5f71\u50cf\u8f93\u5165\u5c1a\u672a\u5b8c\u6210\u9884\u5904\u7406'],
+              required_inputs: ['image.nii.gz'],
+              detected_inputs: [],
+              next_action: '\u8fdb\u5165 /cases/' + caseId + '/imaging-inputs',
+            },
+            multimodal_resnet18: {
+              status: 'blocked',
+              can_run: false,
+              disabled_reasons: ['multimodal \u9700\u8981\u540c\u65f6\u5177\u5907\u4e34\u5e8a\u548c\u5f71\u50cf\u8f93\u5165'],
+              required_inputs: ['clinical snapshot', 'image.nii.gz'],
+              detected_inputs: [],
+              next_action: '\u5148\u8865\u9f50\u4e34\u5e8a\u548c\u5f71\u50cf\u8f93\u5165',
+            },
+          },
+    };
+  }
+  const data = (await client.get('/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow-readiness')).data;
+  return data as CapCopShadowWorkflowReadinessResponse;
 }
 
 export async function listMissingValueQueries(caseId: string, traceId?: string): Promise<MissingValueListResponse> {
