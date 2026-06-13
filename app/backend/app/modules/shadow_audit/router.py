@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -28,11 +29,14 @@ from app.modules.shadow_audit.schemas import (
     ShadowInferenceRunDetailResponseV1,
     ShadowInferenceRunItemV1,
     ShadowInferenceRunListResponseV1,
+    CapCopShadowWorkflowBranchReadinessItemV1,
+    CapCopShadowWorkflowReadinessResponseV1,
 )
 from app.modules.shadow_audit.clinical_mlp import run_cap_cop_clinical_mlp_fold5_one_shot_shadow
 from app.modules.shadow_audit.multimodal_resnet18 import run_controlled_multimodal_resnet18_one_shot_shadow
 from app.modules.shadow_audit.imaging_resnet18 import run_controlled_imaging_resnet18_one_shot_shadow
 from app.modules.shadow_audit.service import create_shadow_audit_record, run_controlled_cap_cop_clinical_mlp_shadow
+from app.modules.shadow_audit.workflow_readiness import build_cap_cop_shadow_workflow_readiness
 
 router = APIRouter()
 
@@ -216,6 +220,30 @@ def run_controlled_shadow_multimodal_resnet18_one_shot(
         error_message=result.error_message,
         limitations=list(result.limitations or []),
     )
+
+@router.get('/cases/{case_id}/cap-cop-shadow/workflow-readiness', response_model=CapCopShadowWorkflowReadinessResponseV1)
+def get_cap_cop_shadow_workflow_readiness(
+    case_id: str,
+    db: Session = Depends(get_db),
+    actor: User = Depends(one_shot_guard),
+) -> CapCopShadowWorkflowReadinessResponseV1:
+    case_uuid = _parse_uuid(case_id, 'invalid_case_id', 'Invalid case id')
+    result = build_cap_cop_shadow_workflow_readiness(db, case_uuid, actor)
+    branches = {
+        name: CapCopShadowWorkflowBranchReadinessItemV1.model_validate(value)
+        for name, value in result['branches'].items()
+    }
+    return CapCopShadowWorkflowReadinessResponseV1(
+        status='ok',
+        route=f'/api/v1/cases/{case_id}/cap-cop-shadow/workflow-readiness',
+        overall_status=result['overall_status'],
+        case_id=case_uuid,
+        patient_id=UUID(result['patient_id']),
+        branches=branches,
+        checked_at=datetime.fromisoformat(result['checked_at']),
+        limitations=list(result['limitations']),
+    )
+
 
 @router.get('/shadow-inference-runs/{shadow_run_id}', response_model=ShadowInferenceRunDetailResponseV1)
 def get_shadow_run(shadow_run_id: str, db: Session = Depends(get_db)) -> ShadowInferenceRunDetailResponseV1:

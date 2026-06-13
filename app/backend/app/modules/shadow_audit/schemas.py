@@ -241,3 +241,28 @@ class ControlledShadowMultimodalResNet18OneShotResponseV1(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     limitations: list[str] = Field(default_factory=list)
+
+
+class CapCopShadowWorkflowBranchReadinessItemV1(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    branch_name: Literal['clinical_mlp', 'imaging_resnet18', 'multimodal_resnet18']
+    status: Literal['ready', 'blocked', 'schema_unverified', 'preprocessing_required', 'unavailable']
+    can_run: bool = False
+    disabled_reasons: list[str] = Field(default_factory=list)
+    required_inputs: list[str] = Field(default_factory=list)
+    detected_inputs: dict[str, Any] = Field(default_factory=dict)
+    next_action: str
+
+
+class CapCopShadowWorkflowReadinessResponseV1(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str = 'ok'
+    route: str
+    overall_status: Literal['ready_partial', 'ready_all', 'blocked']
+    case_id: UUID
+    patient_id: UUID | None = None
+    branches: dict[str, CapCopShadowWorkflowBranchReadinessItemV1] = Field(default_factory=dict)
+    checked_at: datetime | None = None
+    limitations: list[str] = Field(default_factory=list)

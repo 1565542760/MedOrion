@@ -61,7 +61,7 @@ def extract_imaging_input_contract(input_row: Any) -> dict[str, Any]:
     storage_uri = _normalize_text(getattr(input_row, "storage_uri", None))
     source_type = _normalize_text(getattr(input_row, "source_type", None)).lower()
     source_format = _normalize_text(provenance.get("source_format") or quality_flags.get("source_format")).lower()
-    preprocessed_format = _normalize_text(provenance.get("preprocessed_format") or quality_flags.get("preprocessed_format")).lower()
+    preprocessed_format = _normalize_text(provenance.get("preprocessed_format") or provenance.get("expected_preprocessed_format") or quality_flags.get("preprocessed_format") or quality_flags.get("expected_preprocessed_format")).lower()
     preprocessing_script = _normalize_text(provenance.get("preprocessing_script") or quality_flags.get("preprocessing_script"))
     conversion_tool = _normalize_text(provenance.get("conversion_tool") or quality_flags.get("conversion_tool"))
     bias_correction = _normalize_text(provenance.get("bias_correction") or quality_flags.get("bias_correction"))
