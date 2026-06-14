@@ -42,7 +42,8 @@ class DicomSeriesImagingInputCreateRequestV1(BaseModel):
 class ImagingPreprocessRequestV1(BaseModel):
     dry_run: bool = True
     execute: bool = False
-    execution_mode: Literal['contract_check', 'dry_run', 'plan_only'] = 'plan_only'
+    execution_mode: Literal['contract_check', 'dry_run', 'plan_only', 'single_demo'] = 'plan_only'
+    allow_real_preprocessing: bool = False
 
 
 class ImagingInputSummaryItemV1(BaseModel):
@@ -140,7 +141,7 @@ class ImagingPreprocessResponseV1(BaseModel):
     route: str
     dry_run: bool = True
     execute: bool = False
-    execution_mode: Literal['contract_check', 'dry_run', 'plan_only'] = 'plan_only'
+    execution_mode: Literal['contract_check', 'dry_run', 'plan_only', 'single_demo'] = 'plan_only'
     will_execute: bool = False
     job_id: str = 'unknown'
     job_state: str = 'not_implemented'

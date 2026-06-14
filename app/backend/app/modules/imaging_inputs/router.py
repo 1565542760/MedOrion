@@ -27,6 +27,7 @@ from app.modules.imaging_inputs.schemas import (
     ImagingInputSummaryItemV1,
     ImagingPreprocessResponseV1,
 )
+from app.modules.imaging_inputs.preprocess_execute import execute_controlled_single_demo_dicom_preprocessing
 from app.modules.imaging_inputs.preprocess_plan import build_imaging_preprocessing_job_plan
 from app.modules.shadow_audit.imaging_contract import (
     IMAGING_BIAS_CORRECTION,
@@ -253,6 +254,66 @@ def _persist_preprocess_preview(
     return row
 
 
+def _persist_preprocess_execution_result(
+    db: Session,
+    row: CaseImagingInput,
+    *,
+    preprocessing_status: str,
+    execution_mode: str,
+    dry_run: bool,
+    execute: bool,
+    candidate_kind: str,
+    job_plan: dict[str, Any],
+    execution_result: dict[str, Any] | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> CaseImagingInput:
+    provenance = dict(row.provenance_json or {})
+    quality_flags = dict(row.quality_flags_json or {})
+    execution_payload = {
+        'preprocessing_status': preprocessing_status,
+        'preprocessing_execution_mode': execution_mode,
+        'preprocessing_dry_run': dry_run,
+        'preprocessing_execute': execute,
+        'preprocessing_will_execute': bool(execute),
+        'preprocessing_requested_at': _now().isoformat(),
+        'preprocessing_job_id': job_plan['job_id'],
+        'preprocessing_job_state': preprocessing_status,
+        'preprocessing_managed_workspace': job_plan['managed_workspace'],
+        'preprocessing_expected_input_kind': job_plan['expected_input_kind'],
+        'preprocessing_candidate_kind': candidate_kind,
+        'preprocessing_command_plan': job_plan['command_plan'],
+        'preprocessing_expected_outputs': job_plan['expected_outputs'],
+        'preprocessing_safety_gate': job_plan['safety_gate'],
+        'expected_steps': job_plan['expected_steps'],
+        'expected_raw_output_file': IMAGING_RAW_OUTPUT_FILE,
+        'expected_model_input_file': IMAGING_MODEL_INPUT_FILE,
+        'expected_label_file': IMAGING_LABEL_FILE,
+        'expected_preprocessed_format': IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
+        'preprocessing_error_code': error_code,
+        'preprocessing_error_message': error_message,
+    }
+    if execution_result:
+        execution_payload.update({
+            'preprocessing_source_storage_uri': execution_result.get('source_storage_uri'),
+            'preprocessing_raw_output_uri': execution_result.get('raw_output_uri'),
+            'preprocessing_image_output_uri': execution_result.get('image_output_uri'),
+            'preprocessing_dcm2niix_stdout': execution_result.get('dcm2niix_stdout'),
+            'preprocessing_dcm2niix_stderr': execution_result.get('dcm2niix_stderr'),
+            'preprocessing_n4_stdout': execution_result.get('n4_stdout'),
+            'preprocessing_n4_stderr': execution_result.get('n4_stderr'),
+        })
+        if preprocessing_status == 'completed' and execution_result.get('image_output_uri'):
+            row.storage_uri = str(execution_result['image_output_uri'])
+    provenance.update(execution_payload)
+    quality_flags.update(execution_payload)
+    row.provenance_json = provenance
+    row.quality_flags_json = quality_flags
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 @router.post('/cases/{case_id}/imaging-inputs', response_model=ImagingInputCreateResponseV1)
 def create_imaging_input(
     case_id: str,
@@ -445,6 +506,99 @@ def preprocess_imaging_input(
     classification = job_plan['classification']
 
     if payload.execute:
+        if payload.allow_real_preprocessing and payload.execution_mode == 'single_demo':
+            try:
+                execution_result = execute_controlled_single_demo_dicom_preprocessing(
+                    row,
+                    job_plan,
+                    allow_real_preprocessing=payload.allow_real_preprocessing,
+                    execution_mode=payload.execution_mode,
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                row = _persist_preprocess_execution_result(
+                    db,
+                    row,
+                    preprocessing_status='failed',
+                    execution_mode=payload.execution_mode,
+                    dry_run=payload.dry_run,
+                    execute=payload.execute,
+                    candidate_kind=classification['candidate_kind'],
+                    job_plan=job_plan,
+                    error_code='controlled_preprocessing_failed',
+                    error_message=str(exc),
+                )
+                status_item = _status_item(row)
+                return ImagingPreprocessResponseV1(
+                    status='failed',
+                    route='/imaging-inputs/{input_asset_id}/preprocess',
+                    dry_run=payload.dry_run,
+                    execute=payload.execute,
+                    execution_mode=payload.execution_mode,
+                    will_execute=True,
+                    job_id=job_plan['job_id'],
+                    job_state='failed',
+                    managed_workspace=job_plan['managed_workspace'],
+                    expected_input_kind=job_plan['expected_input_kind'],
+                    candidate_kind=classification['candidate_kind'],
+                    error_code='controlled_preprocessing_failed',
+                    message='Controlled preprocessing failed; temporary outputs were cleaned up',
+                    expected_steps=job_plan['expected_steps'],
+                    command_plan=job_plan['command_plan'],
+                    expected_outputs=job_plan['expected_outputs'],
+                    safety_gate=job_plan['safety_gate'],
+                    item=status_item,
+                    limitations=[
+                        'not_for_diagnosis',
+                        'shadow_only',
+                        'not_formal_recommendation',
+                        'controlled_real_preprocessing_requested',
+                        'preprocessing_failed',
+                        'managed_workspace_only',
+                    ],
+                )
+            row = _persist_preprocess_execution_result(
+                db,
+                row,
+                preprocessing_status='completed',
+                execution_mode=payload.execution_mode,
+                dry_run=payload.dry_run,
+                execute=payload.execute,
+                candidate_kind=classification['candidate_kind'],
+                job_plan=job_plan,
+                execution_result=execution_result,
+            )
+            status_item = _status_item(row)
+            return ImagingPreprocessResponseV1(
+                status='completed',
+                route='/imaging-inputs/{input_asset_id}/preprocess',
+                dry_run=payload.dry_run,
+                execute=payload.execute,
+                execution_mode=payload.execution_mode,
+                will_execute=True,
+                job_id=job_plan['job_id'],
+                job_state='completed',
+                managed_workspace=job_plan['managed_workspace'],
+                expected_input_kind=job_plan['expected_input_kind'],
+                candidate_kind=classification['candidate_kind'],
+                error_code=None,
+                message='Controlled single-demo DICOM preprocessing completed',
+                expected_steps=job_plan['expected_steps'],
+                command_plan=execution_result['command_plan'],
+                expected_outputs=job_plan['expected_outputs'],
+                safety_gate=job_plan['safety_gate'],
+                item=status_item,
+                limitations=[
+                    'not_for_diagnosis',
+                    'shadow_only',
+                    'not_formal_recommendation',
+                    'controlled_real_preprocessing_executed',
+                    'single_demo',
+                    'managed_workspace_only',
+                    'no_model_run',
+                ],
+            )
         row = _persist_preprocess_preview(
             db,
             row,
