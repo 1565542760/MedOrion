@@ -16,6 +16,7 @@ IMAGING_RAW_OUTPUT_FILE = "raw_image.nii.gz"
 IMAGING_PREPROCESSING_EXECUTION_MODE_CONTRACT_CHECK = "contract_check"
 IMAGING_PREPROCESSING_EXECUTION_MODE_DRY_RUN = "dry_run"
 IMAGING_MANAGED_PREPROCESSING_WORKSPACE_ROOT = Path("/srv/medorion/workspaces/imaging_preprocessing")
+
 IMAGING_PREPROCESSING_STATUS_PENDING = "pending"
 IMAGING_PREPROCESSING_STATUS_READY = "ready_for_preprocessing"
 IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED = "already_preprocessed_candidate"
@@ -23,7 +24,8 @@ IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED = "not_implemented"
 IMAGING_PREPROCESSING_STATUS_RUNNING = "running"
 IMAGING_PREPROCESSING_STATUS_COMPLETED = "completed"
 IMAGING_PREPROCESSING_STATUS_FAILED = "failed"
-IMAGING_REAL_SHADOW_ALLOWED_SOURCE_TYPES = {"synthetic"}
+
+IMAGING_REAL_SHADOW_ALLOWED_SOURCE_TYPES = {"synthetic", "demo", "real_deidentified"}
 
 
 def _normalize_text(value: Any) -> str:
@@ -35,7 +37,7 @@ def _as_mapping(value: Any) -> dict[str, Any]:
 
 
 def _looks_like_nifti_reference(storage_uri: str) -> bool:
-    lowered = storage_uri.lower()
+    lowered = storage_uri.lower().strip()
     return lowered.endswith(".nii") or lowered.endswith(".nii.gz")
 
 
@@ -54,27 +56,23 @@ def _looks_like_dicom_directory(storage_uri: str) -> bool:
             return True
     except OSError:
         pass
-    if "dicom" in lowered and not _looks_like_nifti_reference(lowered):
-        return True
-    return False
-
-
+    return "dicom" in lowered and not _looks_like_nifti_reference(lowered)
 
 
 def _is_managed_preprocessed_reference(storage_uri: str) -> bool:
     normalized = storage_uri.strip()
     if not normalized:
         return False
-    if normalized.startswith(file://):
+    if normalized.startswith("file://"):
         normalized = normalized[7:]
-    normalized = normalized.replace(\, /)
+    normalized = normalized.replace("\\", "/")
     if not normalized:
         return False
-    root = str(IMAGING_MANAGED_PREPROCESSING_WORKSPACE_ROOT).replace(\, /).rstrip(/)
-    if not root:
-        return False
-    if normalized == root or normalized.startswith(root + /):
+
+    root = str(IMAGING_MANAGED_PREPROCESSING_WORKSPACE_ROOT).replace("\\", "/").rstrip("/")
+    if normalized == root or normalized.startswith(root + "/"):
         return True
+
     path = Path(normalized)
     try:
         if path.exists():
@@ -84,19 +82,28 @@ def _is_managed_preprocessed_reference(storage_uri: str) -> bool:
     except OSError:
         pass
     return False
+
+
 def extract_imaging_input_contract(input_row: Any) -> dict[str, Any]:
     provenance = _as_mapping(getattr(input_row, "provenance_json", None))
     quality_flags = _as_mapping(getattr(input_row, "quality_flags_json", None))
     storage_uri = _normalize_text(getattr(input_row, "storage_uri", None))
     source_type = _normalize_text(getattr(input_row, "source_type", None)).lower()
     source_format = _normalize_text(provenance.get("source_format") or quality_flags.get("source_format")).lower()
-    preprocessed_format = _normalize_text(provenance.get("preprocessed_format") or provenance.get("expected_preprocessed_format") or quality_flags.get("preprocessed_format") or quality_flags.get("expected_preprocessed_format")).lower()
+    preprocessed_format = _normalize_text(
+        provenance.get("preprocessed_format")
+        or provenance.get("expected_preprocessed_format")
+        or quality_flags.get("preprocessed_format")
+        or quality_flags.get("expected_preprocessed_format")
+    ).lower()
     preprocessing_script = _normalize_text(provenance.get("preprocessing_script") or quality_flags.get("preprocessing_script"))
     conversion_tool = _normalize_text(provenance.get("conversion_tool") or quality_flags.get("conversion_tool"))
     bias_correction = _normalize_text(provenance.get("bias_correction") or quality_flags.get("bias_correction"))
     preprocessing_status = _normalize_text(provenance.get("preprocessing_status") or quality_flags.get("preprocessing_status")).lower()
     model_input_file = _normalize_text(provenance.get("model_input_file") or quality_flags.get("model_input_file")) or IMAGING_MODEL_INPUT_FILE
     label_file = _normalize_text(provenance.get("label_file") or quality_flags.get("label_file")) or IMAGING_LABEL_FILE
+    deidentified = bool(getattr(input_row, "deidentified", False))
+    not_for_diagnosis = bool(getattr(input_row, "not_for_diagnosis", False))
     return {
         "provenance_json": provenance,
         "quality_flags_json": quality_flags,
@@ -110,6 +117,8 @@ def extract_imaging_input_contract(input_row: Any) -> dict[str, Any]:
         "preprocessing_status": preprocessing_status,
         "model_input_file": model_input_file,
         "label_file": label_file,
+        "deidentified": deidentified,
+        "not_for_diagnosis": not_for_diagnosis,
     }
 
 
@@ -120,29 +129,52 @@ def classify_imaging_preprocessing_candidate(input_row: Any) -> dict[str, Any]:
     preprocessed_format = contract["preprocessed_format"]
     source_type = contract["source_type"]
     recorded_status = contract.get("preprocessing_status") or ""
+
     if recorded_status == IMAGING_PREPROCESSING_STATUS_COMPLETED:
         candidate_kind = IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED
     elif source_format == IMAGING_SOURCE_FORMAT_DICOM_SERIES or _looks_like_dicom_directory(storage_uri):
-        candidate_kind = "dicom_series"
+        candidate_kind = IMAGING_SOURCE_FORMAT_DICOM_SERIES
     elif preprocessed_format in {IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ, "synthetic_fixture"} or _looks_like_nifti_reference(storage_uri):
         candidate_kind = IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED
     else:
         candidate_kind = "unsupported_reference"
-    if recorded_status in {IMAGING_PREPROCESSING_STATUS_COMPLETED, IMAGING_PREPROCESSING_STATUS_FAILED, IMAGING_PREPROCESSING_STATUS_RUNNING}:
+
+    if recorded_status in {
+        IMAGING_PREPROCESSING_STATUS_COMPLETED,
+        IMAGING_PREPROCESSING_STATUS_FAILED,
+        IMAGING_PREPROCESSING_STATUS_RUNNING,
+    }:
         preprocessing_status = recorded_status
-    elif candidate_kind == "dicom_series":
+    elif candidate_kind == IMAGING_SOURCE_FORMAT_DICOM_SERIES:
         preprocessing_status = IMAGING_PREPROCESSING_STATUS_PENDING
     elif candidate_kind == IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED:
         preprocessing_status = IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED
     else:
         preprocessing_status = IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED
+
     return {
         "candidate_kind": candidate_kind,
-        "source_format": source_format or (IMAGING_SOURCE_FORMAT_DICOM_SERIES if candidate_kind == "dicom_series" else "unknown"),
+        "source_format": source_format or (IMAGING_SOURCE_FORMAT_DICOM_SERIES if candidate_kind == IMAGING_SOURCE_FORMAT_DICOM_SERIES else "unknown"),
         "preprocessed_format": preprocessed_format or (IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ if candidate_kind == IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED else "unknown"),
         "source_type": source_type or "unknown",
         "storage_uri": storage_uri,
         "preprocessing_status": preprocessing_status,
+    }
+
+
+def imaging_preprocessing_metadata(input_row: Any) -> dict[str, Any]:
+    contract = extract_imaging_input_contract(input_row)
+    return {
+        "source_format": contract["source_format"] or "unknown",
+        "preprocessed_format": contract["preprocessed_format"] or "unknown",
+        "preprocessing_script": contract["preprocessing_script"] or IMAGING_PREPROCESSING_SCRIPT,
+        "conversion_tool": contract["conversion_tool"] or IMAGING_CONVERSION_TOOL,
+        "bias_correction": contract["bias_correction"] or IMAGING_BIAS_CORRECTION,
+        "raw_output_file": IMAGING_RAW_OUTPUT_FILE,
+        "model_input_file": contract["model_input_file"],
+        "label_file": contract["label_file"],
+        "deidentified": bool(contract["deidentified"]),
+        "not_for_diagnosis": bool(contract["not_for_diagnosis"]),
     }
 
 
@@ -162,63 +194,70 @@ def imaging_preprocessing_state(input_row: Any) -> dict[str, Any]:
         "preprocessing_status": classification["preprocessing_status"],
         "source_type": classification["source_type"],
         "storage_uri": classification["storage_uri"],
-        "ready_for_preprocessing": classification["candidate_kind"] == "dicom_series",
+        "ready_for_preprocessing": classification["candidate_kind"] == IMAGING_SOURCE_FORMAT_DICOM_SERIES,
         "already_preprocessed_candidate": classification["candidate_kind"] == IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED,
     }
 
 
-
 def is_ready_preprocessed_imaging_reference(input_row: Any) -> bool:
     contract = extract_imaging_input_contract(input_row)
-    if not getattr(input_row, deidentified, False) or not getattr(input_row, not_for_diagnosis, False):
+    storage_uri = contract["storage_uri"]
+    if not contract["deidentified"] or not contract["not_for_diagnosis"]:
         return False
-    storage_uri = contract[storage_uri]
     if not storage_uri or not _looks_like_nifti_reference(storage_uri):
         return False
     if not _is_managed_preprocessed_reference(storage_uri):
         return False
-    source_format = contract[source_format]
-    preprocessed_format = contract[preprocessed_format]
-    preprocessing_status = contract[preprocessing_status]
+
+    source_format = contract["source_format"]
+    preprocessed_format = contract["preprocessed_format"]
+    preprocessing_status = contract["preprocessing_status"]
+
     if source_format == IMAGING_SOURCE_FORMAT_DICOM_SERIES:
         return preprocessing_status == IMAGING_PREPROCESSING_STATUS_COMPLETED
-    if preprocessed_format in {IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ, synthetic_fixture}:
-        return preprocessing_status in {IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED, IMAGING_PREPROCESSING_STATUS_COMPLETED}
+    if preprocessed_format in {IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ, "synthetic_fixture"}:
+        return preprocessing_status in {
+            IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED,
+            IMAGING_PREPROCESSING_STATUS_COMPLETED,
+        }
     return False
+
+
 def require_preprocessed_imaging_reference(input_row: Any, *, allow_synthetic_only: bool = True) -> dict[str, Any]:
     contract = extract_imaging_input_contract(input_row)
-    provenance = _as_mapping(getattr(input_row, "provenance_json", None))
-    quality_flags = _as_mapping(getattr(input_row, "quality_flags_json", None))
     storage_uri = contract["storage_uri"]
     source_type = contract["source_type"]
     source_format = contract["source_format"]
     preprocessed_format = contract["preprocessed_format"]
-    preprocessing_status = _normalize_text(provenance.get("preprocessing_status") or quality_flags.get("preprocessing_status")).lower()
-    if allow_synthetic_only and source_type != "synthetic":
+    preprocessing_status = contract["preprocessing_status"]
+
+    if allow_synthetic_only and source_type not in IMAGING_REAL_SHADOW_ALLOWED_SOURCE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "code": "unsupported_source_type",
-                "message": "Only synthetic imaging inputs are allowed for this coursework bridge",
+                "message": "Only synthetic/demo/deidentified imaging inputs are allowed for this coursework bridge",
             },
         )
+
     if source_format == IMAGING_SOURCE_FORMAT_DICOM_SERIES:
         if preprocessing_status != IMAGING_PREPROCESSING_STATUS_COMPLETED:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
-                    code: imaging_input_not_preprocessed,
-                    message: DICOM series must be preprocessed with dcmtonii_N4.py before shadow execution,
+                    "code": "imaging_input_not_preprocessed",
+                    "message": "DICOM series must be preprocessed with dcmtonii_N4.py before shadow execution",
                 },
             )
         if not _is_managed_preprocessed_reference(storage_uri):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
-                    code: imaging_input_not_preprocessed,
-                    message: Completed DICOM preprocessing must resolve to a managed workspace NIfTI reference,
+                    "code": "imaging_input_not_preprocessed",
+                    "message": "Completed DICOM preprocessing must resolve to a managed workspace NIfTI reference",
                 },
             )
+
     if _looks_like_dicom_directory(storage_uri) and preprocessing_status != IMAGING_PREPROCESSING_STATUS_COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -227,6 +266,7 @@ def require_preprocessed_imaging_reference(input_row: Any, *, allow_synthetic_on
                 "message": "DICOM directory storage_uri must be preprocessed into NIfTI before shadow execution",
             },
         )
+
     if preprocessed_format and preprocessed_format not in {
         IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
         "synthetic_fixture",
@@ -238,6 +278,7 @@ def require_preprocessed_imaging_reference(input_row: Any, *, allow_synthetic_on
                 "message": "Real shadow execution requires a preprocessed NIfTI input or synthetic fixture",
             },
         )
+
     if storage_uri and not _looks_like_nifti_reference(storage_uri):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -246,17 +287,6 @@ def require_preprocessed_imaging_reference(input_row: Any, *, allow_synthetic_on
                 "message": "Real shadow execution requires a preprocessed .nii or .nii.gz reference",
             },
         )
+
     return contract
 
-
-def imaging_preprocessing_metadata(input_row: Any) -> dict[str, Any]:
-    contract = extract_imaging_input_contract(input_row)
-    return {
-        "source_format": contract["source_format"] or "unknown",
-        "preprocessed_format": contract["preprocessed_format"] or "unknown",
-        "preprocessing_script": contract["preprocessing_script"] or IMAGING_PREPROCESSING_SCRIPT,
-        "conversion_tool": contract["conversion_tool"] or IMAGING_CONVERSION_TOOL,
-        "bias_correction": contract["bias_correction"] or IMAGING_BIAS_CORRECTION,
-        "model_input_file": contract["model_input_file"],
-        "label_file": contract["label_file"],
-    }

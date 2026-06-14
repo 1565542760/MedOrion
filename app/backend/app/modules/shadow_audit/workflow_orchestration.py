@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any, Iterable
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -15,7 +16,7 @@ from app.modules.shadow_audit.imaging_contract import imaging_preprocessing_stat
 from app.modules.shadow_audit.imaging_resnet18 import run_controlled_imaging_resnet18_one_shot_shadow
 from app.modules.shadow_audit.multimodal_resnet18 import run_controlled_multimodal_resnet18_one_shot_shadow
 from app.modules.shadow_audit.schemas import ControlledShadowClinicalMlpFold5OneShotRequestV1, ControlledShadowImagingResNet18OneShotRequestV1, ControlledShadowMultimodalResNet18OneShotRequestV1
-from app.modules.shadow_audit.workflow_readiness import build_cap_cop_shadow_workflow_readiness, _multimodal_clinical_payload_contract
+from app.modules.shadow_audit.workflow_readiness import build_cap_cop_shadow_workflow_readiness, _latest_ready_multimodal_snapshot, _multimodal_clinical_payload_contract
 
 BRANCHES = ['clinical_mlp', 'imaging_resnet18', 'multimodal_resnet18']
 PREVIEW_LIMITATIONS = ['preview_only', 'shadow_only', 'not_for_diagnosis', 'not_formal_recommendation', 'probability_uncalibrated', 'requires_doctor_review', 'requires_quality_review_before_clinical_use', 'no_runner_invocation', 'no_trace_or_evidence']
@@ -95,10 +96,10 @@ def _failed(branch: str, code: str, message: str | None = None):
 
 
 def _clinical(db: Session, case_id: str, actor: User, trace_id: str | None, dry_run_label: str | None):
-    snapshot = _latest_ready_snapshot(db, _uuid(case_id, 'invalid_case_id', 'Invalid case id'))
+    snapshot = _latest_ready_multimodal_snapshot(db, _uuid(case_id, 'invalid_case_id', 'Invalid case id'))
     if snapshot is None:
         return _failed('clinical_mlp', 'clinical_snapshot_not_ready', 'No ready clinical snapshot was found')
-    result = run_cap_cop_clinical_mlp_fold5_one_shot_shadow(db, case_id, actor, ControlledShadowClinicalMlpFold5OneShotRequestV1(input_snapshot_id=snapshot.input_snapshot_id, trace_id=trace_id or snapshot.trace_id, dry_run_label=dry_run_label))
+    result = run_cap_cop_clinical_mlp_fold5_one_shot_shadow(db, case_id, actor, SimpleNamespace(input_snapshot_id=snapshot.input_snapshot_id, trace_id=trace_id or snapshot.trace_id, dry_run_label=dry_run_label, skip_input_assessment=True))
     output = result.outputs[0] if result.outputs else None
     candidate, probabilities, limitations = _output(output)
     if output is None and result.run.status == 'shadow_success':
@@ -121,7 +122,7 @@ def _imaging(db: Session, case_id: str, actor: User, trace_id: str | None, dry_r
 
 def _multimodal(db: Session, case_id: str, actor: User, trace_id: str | None, dry_run_label: str | None):
     case_uuid = _uuid(case_id, 'invalid_case_id', 'Invalid case id')
-    snapshot = _latest_ready_snapshot(db, case_uuid)
+    snapshot = _latest_ready_multimodal_snapshot(db, case_uuid)
     imaging_row = _latest_ready_imaging(db, case_uuid)
     if snapshot is None or imaging_row is None:
         return _item('multimodal_resnet18', 'skipped', disabled=['multimodal_inputs_not_ready'], limitations=_limits(False))

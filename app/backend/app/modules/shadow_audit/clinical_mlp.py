@@ -96,6 +96,16 @@ def _preprocess_path(snapshot: CaseModelInputSnapshot) -> Path:
     return PREPROCESS_ARTIFACT_PATH.parent / ref
 
 
+def _runner_feature_columns() -> list[str]:
+    if not PREPROCESS_ARTIFACT_PATH.exists():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'preprocess_artifact_missing', 'message': f'Preprocess artifact not found at {PREPROCESS_ARTIFACT_PATH}'})
+    payload = _json_load(PREPROCESS_ARTIFACT_PATH)
+    feature_columns = payload.get('feature_columns')
+    if not isinstance(feature_columns, list) or len(feature_columns) != 36:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'preprocess_artifact_invalid', 'message': 'Preprocess artifact feature_columns must contain 36 entries'})
+    return [str(column) for column in feature_columns]
+
+
 def _encode_numeric_feature(feature: Any, raw_value: Any) -> float:
     feature_type = str(getattr(feature, 'feature_type', '') or '').lower()
     enum_mapping = getattr(feature, 'enum_mapping', None)
@@ -324,7 +334,8 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
         )
 
     assessment = build_model_input_assessment_from_schema(schema_item, snapshot.mapped_features_json or {})
-    if assessment.insufficient_data_for_assessment or assessment.current_assessment_status != 'ready_for_inference':
+    skip_input_assessment = bool(getattr(payload, 'skip_input_assessment', False))
+    if not skip_input_assessment and (assessment.insufficient_data_for_assessment or assessment.current_assessment_status != 'ready_for_inference'):
         return _write_shadow_audit(
             db,
             case_uuid=case_uuid,
@@ -349,13 +360,14 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             torch_available=False,
         )
 
+    runner_feature_columns = _runner_feature_columns()
     runner_request = {
         'trace_id': trace_id,
         'case_id': str(case_uuid),
         'patient_id': str(case.patient_id),
         'input_snapshot_id': snapshot.input_snapshot_id,
         'model_version_id': str(version.id),
-        'mapped_features': [snapshot.mapped_features_json.get(feature.model_feature_name) for feature in schema_item.feature_requirements],
+        'mapped_features': [snapshot.mapped_features_json.get(feature_name) for feature_name in runner_feature_columns],
         'not_for_diagnosis': True,
     }
     if payload.dry_run_label:

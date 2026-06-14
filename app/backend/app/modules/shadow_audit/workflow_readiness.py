@@ -41,6 +41,8 @@ MULTIMODAL_CLINICAL_FEATURE_COLUMNS_PATH = Path(
     '/srv/medorion/models/agents/cap_cop_classifier_agent/v1.0.0/'
     'multimodal_resnet18_bigdata/preprocess_artifacts/clinical_tabular_standardization_v1.json'
 )
+MULTIMODAL_SCHEMA_ID = 'clinical_mlp_cap_cop_input_schema_v1'
+MULTIMODAL_FEATURE_SET_ID = 'cap_cop_clinical_feature_set_v1'
 
 
 def _now() -> datetime:
@@ -73,6 +75,26 @@ def _latest_ready_snapshot(db: Session, case_id: UUID) -> CaseModelInputSnapshot
             CaseModelInputSnapshot.id.desc(),
         )
     ).scalars().first()
+
+def _latest_ready_multimodal_snapshot(db: Session, case_id: UUID) -> CaseModelInputSnapshot | None:
+    rows = db.execute(
+        select(CaseModelInputSnapshot)
+        .where(CaseModelInputSnapshot.case_id == case_id)
+        .where(CaseModelInputSnapshot.validation_status == 'ready_for_inference')
+        .where(CaseModelInputSnapshot.current_assessment_status == 'ready_for_inference')
+        .where(CaseModelInputSnapshot.not_for_diagnosis.is_(True))
+        .where(CaseModelInputSnapshot.runtime_stub.is_(True))
+        .order_by(
+            CaseModelInputSnapshot.created_at.desc().nullslast(),
+            CaseModelInputSnapshot.updated_at.desc().nullslast(),
+            CaseModelInputSnapshot.id.desc(),
+        )
+    ).scalars().all()
+    for row in rows:
+        contract = _multimodal_clinical_payload_contract(row)
+        if contract['ready']:
+            return row
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -107,6 +129,64 @@ def _coerce_multimodal_numeric_value(value: Any) -> float | None:
     return None
 
 
+def _multimodal_clinical_feature_values(snapshot: CaseModelInputSnapshot) -> tuple[dict[str, float], dict[str, Any]]:
+    mapped = snapshot.mapped_features_json if isinstance(snapshot.mapped_features_json, dict) else {}
+    if not mapped:
+        raise RuntimeError('clinical_input_insufficient: clinical snapshot missing mapped_features_json')
+    feature_columns = _multimodal_runner_feature_columns()
+    mapped_keys = list(mapped.keys())
+    missing = [feature_name for feature_name in feature_columns if feature_name not in mapped]
+    if missing:
+        raise RuntimeError(f'clinical_input_insufficient: missing features {missing}')
+    extra = [feature_name for feature_name in mapped_keys if feature_name not in feature_columns]
+    if extra:
+        raise RuntimeError(f'multimodal_clinical_schema_unverified: unexpected features {extra}')
+
+    ordered_snapshot_features: list[str] = []
+    provided_features = snapshot.doctor_provided_features_json if isinstance(snapshot.doctor_provided_features_json, list) else []
+    for item in provided_features:
+        if isinstance(item, dict):
+            feature_name = item.get('feature_name') or item.get('model_feature_name')
+        else:
+            feature_name = item
+        feature_name = str(feature_name or '').strip()
+        if feature_name:
+            ordered_snapshot_features.append(feature_name)
+
+    if not ordered_snapshot_features:
+        ordered_snapshot_features = list(mapped_keys)
+
+    if ordered_snapshot_features != feature_columns:
+        raise RuntimeError('multimodal_clinical_schema_unverified: snapshot feature order must exactly match artifact order')
+
+    runner_values: dict[str, float] = {}
+    invalid: list[str] = []
+    for feature_name in feature_columns:
+        numeric_value = _coerce_multimodal_numeric_value(mapped.get(feature_name))
+        if numeric_value is None:
+            invalid.append(feature_name)
+            continue
+        runner_values[feature_name] = float(numeric_value)
+    if invalid:
+        raise RuntimeError(f'clinical_input_insufficient: non-numeric features {invalid}')
+    summary = {
+        'feature_order': feature_columns,
+        'feature_order_matches_artifact': ordered_snapshot_features == feature_columns,
+        'feature_count': len(feature_columns),
+        'translation_mode': 'strict_exact_artifact_order',
+        'default_fallback_allowed': False,
+        'alias_mapping_allowed': False,
+        'translated_from_snapshot_features': list(ordered_snapshot_features),
+        'artifact_feature_order': feature_columns,
+        'snapshot_feature_order': list(ordered_snapshot_features),
+        'mapped_feature_keys': mapped_keys,
+        'explicit_default_features': [],
+        'snapshot_extra_features': extra,
+        'note': 'Snapshot clinical provenance must already match the runner artifact feature order without alias or default fallback.',
+    }
+    return runner_values, summary
+
+
 def _multimodal_clinical_payload_contract(snapshot: CaseModelInputSnapshot | None) -> dict[str, Any]:
     required_inputs = [
         'clinical_snapshot_ready_for_inference',
@@ -117,6 +197,7 @@ def _multimodal_clinical_payload_contract(snapshot: CaseModelInputSnapshot | Non
         'full_36_feature_payload',
         'Striated_shadow.1',
         'no_alias_or_default_fallback',
+        'snapshot_feature_order_matches_artifact',
     ]
     detected_inputs: dict[str, Any] = {
         'selected_snapshot': _snapshot_summary(snapshot),
@@ -125,9 +206,12 @@ def _multimodal_clinical_payload_contract(snapshot: CaseModelInputSnapshot | Non
         'default_fallback_allowed': False,
         'alias_mapping_allowed': False,
         'feature_count': 0,
+        'feature_order_matches_artifact': False,
         'missing_required_features': [],
         'invalid_numeric_features': [],
         'extra_snapshot_features': [],
+        'artifact_feature_order': [],
+        'snapshot_feature_order': [],
         'runner_feature_values': {},
     }
     if snapshot is None:
@@ -151,52 +235,42 @@ def _multimodal_clinical_payload_contract(snapshot: CaseModelInputSnapshot | Non
         reasons.append('not_for_diagnosis_false')
     if not bool(snapshot.runtime_stub):
         reasons.append('runtime_safety_not_ready')
-
     try:
-        feature_columns = _multimodal_runner_feature_columns()
+        feature_values, feature_summary = _multimodal_clinical_feature_values(snapshot)
     except RuntimeError as exc:
-        detected_inputs['artifact_error'] = str(exc)
+        message = str(exc)
+        detected_inputs['artifact_error'] = message
+        if message.startswith('multimodal_clinical_schema_unverified'):
+            return {
+                'ready': False,
+                'status': BRANCH_STATUS_SCHEMA_UNVERIFIED,
+                'disabled_reasons': ['multimodal_clinical_schema_unverified'],
+                'required_inputs': required_inputs,
+                'detected_inputs': detected_inputs,
+                'next_action': 'refresh_clinical_validation',
+            }
         return {
             'ready': False,
-            'status': BRANCH_STATUS_SCHEMA_UNVERIFIED,
-            'disabled_reasons': ['multimodal_clinical_schema_unverified'],
+            'status': BRANCH_STATUS_BLOCKED,
+            'disabled_reasons': ['clinical_input_insufficient'],
             'required_inputs': required_inputs,
             'detected_inputs': detected_inputs,
-            'next_action': 'refresh_clinical_validation',
+            'next_action': 'repair_clinical_snapshot_payload',
         }
 
-    mapped = snapshot.mapped_features_json if isinstance(snapshot.mapped_features_json, dict) else {}
-    if not mapped:
-        reasons.append('clinical_input_insufficient')
-    missing = [feature_name for feature_name in feature_columns if feature_name not in mapped]
-    if missing:
-        reasons.append('clinical_input_insufficient')
-    invalid: list[str] = []
-    runner_values: dict[str, float] = {}
-    for feature_name in feature_columns:
-        numeric_value = _coerce_multimodal_numeric_value(mapped.get(feature_name))
-        if numeric_value is None:
-            invalid.append(feature_name)
-            continue
-        runner_values[feature_name] = float(numeric_value)
-    if invalid:
-        reasons.append('clinical_input_insufficient')
-    extra = [feature_name for feature_name in mapped if feature_name not in feature_columns]
-    if extra:
-        reasons.append('multimodal_clinical_schema_unverified')
+    detected_inputs.update(feature_summary)
+    detected_inputs['runner_feature_values'] = feature_values
+    detected_inputs['snapshot_validation_status'] = snapshot.validation_status
+    detected_inputs['snapshot_current_assessment_status'] = snapshot.current_assessment_status
+    detected_inputs['snapshot_not_for_diagnosis'] = bool(snapshot.not_for_diagnosis)
+    detected_inputs['snapshot_runtime_stub'] = bool(snapshot.runtime_stub)
+    detected_inputs['snapshot_model_input_schema_id'] = snapshot.model_input_schema_id
+    detected_inputs['snapshot_disease_task_feature_set_id'] = snapshot.disease_task_feature_set_id
 
-    detected_inputs.update({
-        'feature_order': feature_columns,
-        'feature_count': len(feature_columns),
-        'missing_required_features': missing,
-        'invalid_numeric_features': invalid,
-        'extra_snapshot_features': extra,
-        'runner_feature_values': runner_values,
-        'snapshot_validation_status': snapshot.validation_status,
-        'snapshot_current_assessment_status': snapshot.current_assessment_status,
-        'snapshot_not_for_diagnosis': bool(snapshot.not_for_diagnosis),
-        'snapshot_runtime_stub': bool(snapshot.runtime_stub),
-    })
+    if feature_summary['feature_count'] != 36:
+        reasons.append('multimodal_clinical_schema_unverified')
+    if not feature_summary['feature_order_matches_artifact']:
+        reasons.append('multimodal_clinical_schema_unverified')
 
     reasons = list(dict.fromkeys(reasons))
     ready = not reasons
@@ -473,7 +547,7 @@ def _multimodal_branch(db: Session, case_id: UUID, clinical: dict[str, Any], ima
         'Striated_shadow.1',
         'strict_artifact_order=clinical_tabular_standardization_v1.json',
     ]
-    clinical_snapshot = _latest_ready_snapshot(db, case_id)
+    clinical_snapshot = _latest_ready_multimodal_snapshot(db, case_id)
     if clinical['can_run'] and imaging['can_run']:
         contract = _multimodal_clinical_payload_contract(clinical_snapshot)
         if not contract['ready']:
@@ -488,6 +562,8 @@ def _multimodal_branch(db: Session, case_id: UUID, clinical: dict[str, Any], ima
                     'clinical': clinical['detected_inputs'],
                     'imaging': imaging['detected_inputs'],
                     'clinical_contract': contract['detected_inputs'],
+                    'selected_multimodal_snapshot': _snapshot_summary(clinical_snapshot),
+                    'fallback_ready_snapshot': _snapshot_summary(_latest_ready_snapshot(db, case_id)),
                     'same_case': True,
                 },
                 'next_action': contract['next_action'],
@@ -502,6 +578,8 @@ def _multimodal_branch(db: Session, case_id: UUID, clinical: dict[str, Any], ima
                 'clinical': clinical['detected_inputs'],
                 'imaging': imaging['detected_inputs'],
                 'clinical_contract': contract['detected_inputs'],
+                'selected_multimodal_snapshot': _snapshot_summary(clinical_snapshot),
+                'fallback_ready_snapshot': _snapshot_summary(_latest_ready_snapshot(db, case_id)),
                 'same_case': True,
             },
             'next_action': 'launch_multimodal_resnet18_shadow',
@@ -530,6 +608,8 @@ def _multimodal_branch(db: Session, case_id: UUID, clinical: dict[str, Any], ima
             'clinical': clinical['detected_inputs'],
             'imaging': imaging['detected_inputs'],
             'clinical_contract': _multimodal_clinical_payload_contract(clinical_snapshot)['detected_inputs'] if clinical_snapshot is not None else {},
+            'selected_multimodal_snapshot': _snapshot_summary(clinical_snapshot),
+            'fallback_ready_snapshot': _snapshot_summary(_latest_ready_snapshot(db, case_id)),
             'same_case': True,
         },
         'next_action': next_action,

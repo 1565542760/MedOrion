@@ -19,6 +19,7 @@ from app.modules.shadow_audit.imaging_contract import (
     imaging_preprocessing_metadata,
     require_preprocessed_imaging_reference,
 )
+from app.modules.shadow_audit.workflow_readiness import _multimodal_clinical_feature_values, _multimodal_clinical_payload_contract
 from app.modules.shadow_audit.multimodal_runner_bridge import invoke_multimodal_runner
 from app.modules.shadow_audit.schemas import (
     ControlledShadowMultimodalResNet18OneShotRequestV1,
@@ -250,37 +251,7 @@ def _coerce_runner_numeric_value(value: Any) -> float | None:
 
 
 def _clinical_feature_values(snapshot: CaseModelInputSnapshot) -> tuple[dict[str, float], dict[str, Any]]:
-    mapped = snapshot.mapped_features_json if isinstance(snapshot.mapped_features_json, dict) else {}
-    if not mapped:
-        raise RuntimeError("clinical_input_insufficient: clinical snapshot missing mapped_features_json")
-    feature_columns = _runner_feature_columns()
-    mapped_keys = list(mapped.keys())
-    missing = [feature_name for feature_name in feature_columns if feature_name not in mapped]
-    if missing:
-        raise RuntimeError(f"clinical_input_insufficient: missing features {missing}")
-    runner_values: dict[str, float] = {}
-    invalid: list[str] = []
-    for feature_name in feature_columns:
-        numeric_value = _coerce_runner_numeric_value(mapped.get(feature_name))
-        if numeric_value is None:
-            invalid.append(feature_name)
-            continue
-        runner_values[feature_name] = float(numeric_value)
-    if invalid:
-        raise RuntimeError(f"clinical_input_insufficient: non-numeric features {invalid}")
-    summary = {
-        "feature_order": feature_columns,
-        "feature_count": len(feature_columns),
-        "translation_mode": "strict_exact_artifact_order",
-        "default_fallback_allowed": False,
-        "alias_mapping_allowed": False,
-        "translated_from_snapshot_features": feature_columns,
-        "explicit_default_features": [],
-        "snapshot_extra_features": [feature_name for feature_name in mapped_keys if feature_name not in feature_columns],
-        "note": "Snapshot clinical provenance must already match the runner artifact feature order without alias or default fallback.",
-    }
-    summary["runner_feature_values"] = runner_values
-    return runner_values, summary
+    return _multimodal_clinical_feature_values(snapshot)
 
 
 def _runtime_env(
@@ -562,38 +533,6 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             real_inference=False,
         )
 
-    assessment = build_model_input_assessment_from_schema(schema_item, snapshot.mapped_features_json or {})
-    if assessment.insufficient_data_for_assessment or assessment.current_assessment_status != "ready_for_inference":
-        return _write_shadow_audit(
-            db,
-            case_uuid=case_uuid,
-            case=case,
-            input_row=input_row,
-            snapshot=snapshot,
-            version=version,
-            schema_item=schema_item,
-            trace_id=trace_id,
-            status="shadow_insufficient_input",
-            error_code="insufficient_data_for_assessment",
-            error_detail={
-                "code": "insufficient_data_for_assessment",
-                "message": "Required inputs are insufficient for multimodal shadow execution",
-                "current_assessment_status": assessment.current_assessment_status,
-                "missing_required_features": list(assessment.missing_required_features),
-                "default_strategy_available": bool(assessment.default_strategy_available),
-            },
-            output=None,
-            dry_run_label=payload.dry_run_label,
-            mode="metadata_only_stub",
-            artifact_hash=MULTIMODAL_WEIGHT_HASH,
-            artifact_preflight=None,
-            runner_response=None,
-            runner_state="disabled",
-            prototype_state="prototype_not_executed",
-            clinical_feature_values=[],
-            real_inference=False,
-        )
-
     clinical_feature_values, clinical_feature_translation_summary = _clinical_feature_values(snapshot)
     if any(value is None for value in clinical_feature_values.values()):
         return _write_shadow_audit(
@@ -743,8 +682,8 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
         "modality": input_row.modality,
         "source_type": _normalize_source_type(input_row.source_type),
         "storage_uri": input_row.storage_uri,
-        "source_format": imaging_contract["source_format"],
-        "preprocessed_format": imaging_contract["preprocessed_format"],
+        "source_format": str(imaging_contract.get("preprocessed_format") or imaging_contract["source_format"]),
+        "preprocessed_format": str(imaging_contract.get("preprocessed_format") or imaging_contract["source_format"]),
         "preprocessing_script": imaging_contract["preprocessing_script"],
         "conversion_tool": imaging_contract["conversion_tool"],
         "bias_correction": imaging_contract["bias_correction"],
