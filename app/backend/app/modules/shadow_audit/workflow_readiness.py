@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.access_control import require_case_access
 from app.db.models import CaseImagingInput, CaseModelInputSnapshot
-from app.modules.shadow_audit.imaging_contract import imaging_preprocessing_state
+from app.modules.shadow_audit.imaging_contract import imaging_preprocessing_state, is_ready_preprocessed_imaging_reference
 
 CLINICAL_BRANCH_NAME = 'clinical_mlp'
 IMAGING_BRANCH_NAME = 'imaging_resnet18'
@@ -280,19 +280,7 @@ def _snapshot_summary(row: CaseModelInputSnapshot | None) -> dict[str, Any]:
 
 
 def _imaging_is_ready(row: CaseImagingInput) -> bool:
-    state = imaging_preprocessing_state(row)
-    if not bool(row.deidentified) or not bool(row.not_for_diagnosis):
-        return False
-    source_format = str(state.get('source_format') or '').strip().lower()
-    preprocessed_format = str(state.get('preprocessed_format') or '').strip().lower()
-    preprocessing_status = str(state.get('preprocessing_status') or '').strip().lower()
-    storage_uri = str(state.get('storage_uri') or '').strip().lower()
-    if source_format == 'dicom_series':
-        return preprocessing_status == 'completed'
-    if preprocessed_format == 'nifti_nii_gz':
-        return storage_uri.endswith('.nii') or storage_uri.endswith('.nii.gz') or state.get('candidate_kind') == 'already_preprocessed_candidate'
-    return False
-
+    return is_ready_preprocessed_imaging_reference(row)
 
 def _imaging_summary(row: CaseImagingInput | None) -> dict[str, Any]:
     if row is None:
@@ -312,6 +300,7 @@ def _imaging_summary(row: CaseImagingInput | None) -> dict[str, Any]:
         'preprocessed_format': state.get('preprocessed_format'),
         'preprocessing_status': state.get('preprocessing_status'),
         'candidate_kind': state.get('candidate_kind'),
+        'managed_preprocessed_reference': is_ready_preprocessed_imaging_reference(row),
         'ready': _imaging_is_ready(row),
         'created_at': row.created_at.isoformat() if row.created_at else None,
         'updated_at': row.updated_at.isoformat() if row.updated_at else None,

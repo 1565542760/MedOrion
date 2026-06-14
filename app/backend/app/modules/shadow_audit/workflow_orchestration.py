@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.access_control import require_case_access
 from app.db.models import Case, CaseImagingInput, CaseModelInputSnapshot, User
 from app.modules.shadow_audit.clinical_mlp import run_cap_cop_clinical_mlp_fold5_one_shot_shadow
-from app.modules.shadow_audit.imaging_contract import imaging_preprocessing_state
+from app.modules.shadow_audit.imaging_contract import imaging_preprocessing_state, is_ready_preprocessed_imaging_reference
 from app.modules.shadow_audit.imaging_resnet18 import run_controlled_imaging_resnet18_one_shot_shadow
 from app.modules.shadow_audit.multimodal_resnet18 import run_controlled_multimodal_resnet18_one_shot_shadow
 from app.modules.shadow_audit.schemas import ControlledShadowClinicalMlpFold5OneShotRequestV1, ControlledShadowImagingResNet18OneShotRequestV1, ControlledShadowMultimodalResNet18OneShotRequestV1
@@ -44,19 +44,9 @@ def _latest_ready_snapshot(db: Session, case_id: UUID):
 def _latest_ready_imaging(db: Session, case_id: UUID):
     rows = db.execute(select(CaseImagingInput).where(CaseImagingInput.case_id == case_id).order_by(CaseImagingInput.created_at.desc().nullslast(), CaseImagingInput.updated_at.desc().nullslast(), CaseImagingInput.id.desc())).scalars().all()
     for row in rows:
-        state = imaging_preprocessing_state(row)
-        if not row.deidentified or not row.not_for_diagnosis:
-            continue
-        source_format = str(state.get('source_format') or '').strip().lower()
-        preprocessed_format = str(state.get('preprocessed_format') or '').strip().lower()
-        preprocessing_status = str(state.get('preprocessing_status') or '').strip().lower()
-        storage_uri = str(state.get('storage_uri') or '').strip().lower()
-        if source_format == 'dicom_series' and preprocessing_status == 'completed':
-            return row
-        if preprocessed_format == 'nifti_nii_gz' and (storage_uri.endswith('.nii') or storage_uri.endswith('.nii.gz') or state.get('candidate_kind') == 'already_preprocessed_candidate'):
+        if is_ready_preprocessed_imaging_reference(row):
             return row
     return None
-
 
 def _requested(requested: Iterable[str] | None):
     if not requested:

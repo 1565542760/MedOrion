@@ -15,6 +15,7 @@ IMAGING_LABEL_FILE = "label.nii.gz"
 IMAGING_RAW_OUTPUT_FILE = "raw_image.nii.gz"
 IMAGING_PREPROCESSING_EXECUTION_MODE_CONTRACT_CHECK = "contract_check"
 IMAGING_PREPROCESSING_EXECUTION_MODE_DRY_RUN = "dry_run"
+IMAGING_MANAGED_PREPROCESSING_WORKSPACE_ROOT = Path("/srv/medorion/workspaces/imaging_preprocessing")
 IMAGING_PREPROCESSING_STATUS_PENDING = "pending"
 IMAGING_PREPROCESSING_STATUS_READY = "ready_for_preprocessing"
 IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED = "already_preprocessed_candidate"
@@ -58,6 +59,31 @@ def _looks_like_dicom_directory(storage_uri: str) -> bool:
     return False
 
 
+
+
+def _is_managed_preprocessed_reference(storage_uri: str) -> bool:
+    normalized = storage_uri.strip()
+    if not normalized:
+        return False
+    if normalized.startswith(file://):
+        normalized = normalized[7:]
+    normalized = normalized.replace(\, /)
+    if not normalized:
+        return False
+    root = str(IMAGING_MANAGED_PREPROCESSING_WORKSPACE_ROOT).replace(\, /).rstrip(/)
+    if not root:
+        return False
+    if normalized == root or normalized.startswith(root + /):
+        return True
+    path = Path(normalized)
+    try:
+        if path.exists():
+            resolved = path.resolve()
+            root_path = IMAGING_MANAGED_PREPROCESSING_WORKSPACE_ROOT.resolve()
+            return resolved == root_path or root_path in resolved.parents
+    except OSError:
+        pass
+    return False
 def extract_imaging_input_contract(input_row: Any) -> dict[str, Any]:
     provenance = _as_mapping(getattr(input_row, "provenance_json", None))
     quality_flags = _as_mapping(getattr(input_row, "quality_flags_json", None))
@@ -140,6 +166,25 @@ def imaging_preprocessing_state(input_row: Any) -> dict[str, Any]:
         "already_preprocessed_candidate": classification["candidate_kind"] == IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED,
     }
 
+
+
+def is_ready_preprocessed_imaging_reference(input_row: Any) -> bool:
+    contract = extract_imaging_input_contract(input_row)
+    if not getattr(input_row, deidentified, False) or not getattr(input_row, not_for_diagnosis, False):
+        return False
+    storage_uri = contract[storage_uri]
+    if not storage_uri or not _looks_like_nifti_reference(storage_uri):
+        return False
+    if not _is_managed_preprocessed_reference(storage_uri):
+        return False
+    source_format = contract[source_format]
+    preprocessed_format = contract[preprocessed_format]
+    preprocessing_status = contract[preprocessing_status]
+    if source_format == IMAGING_SOURCE_FORMAT_DICOM_SERIES:
+        return preprocessing_status == IMAGING_PREPROCESSING_STATUS_COMPLETED
+    if preprocessed_format in {IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ, synthetic_fixture}:
+        return preprocessing_status in {IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED, IMAGING_PREPROCESSING_STATUS_COMPLETED}
+    return False
 def require_preprocessed_imaging_reference(input_row: Any, *, allow_synthetic_only: bool = True) -> dict[str, Any]:
     contract = extract_imaging_input_contract(input_row)
     provenance = _as_mapping(getattr(input_row, "provenance_json", None))
@@ -157,14 +202,23 @@ def require_preprocessed_imaging_reference(input_row: Any, *, allow_synthetic_on
                 "message": "Only synthetic imaging inputs are allowed for this coursework bridge",
             },
         )
-    if source_format == IMAGING_SOURCE_FORMAT_DICOM_SERIES and preprocessing_status != IMAGING_PREPROCESSING_STATUS_COMPLETED:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "imaging_input_not_preprocessed",
-                "message": "DICOM series must be preprocessed with dcmtonii_N4.py before shadow execution",
-            },
-        )
+    if source_format == IMAGING_SOURCE_FORMAT_DICOM_SERIES:
+        if preprocessing_status != IMAGING_PREPROCESSING_STATUS_COMPLETED:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    code: imaging_input_not_preprocessed,
+                    message: DICOM series must be preprocessed with dcmtonii_N4.py before shadow execution,
+                },
+            )
+        if not _is_managed_preprocessed_reference(storage_uri):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    code: imaging_input_not_preprocessed,
+                    message: Completed DICOM preprocessing must resolve to a managed workspace NIfTI reference,
+                },
+            )
     if _looks_like_dicom_directory(storage_uri) and preprocessing_status != IMAGING_PREPROCESSING_STATUS_COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
