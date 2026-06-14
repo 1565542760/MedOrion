@@ -1501,6 +1501,100 @@ export type ModelInputSnapshotListResponse = {
   items: ModelInputSnapshotSummaryItem[];
 };
 
+export type ClinicalTableStrictValidationRequestV1 = {
+  raw_columns: string[];
+  rows: Array<Record<string, unknown>>;
+  sample_row: Record<string, unknown>;
+  source_type: 'csv_paste' | 'csv_upload_metadata' | 'manual_entry';
+  not_for_diagnosis?: boolean;
+  shadow_only?: boolean;
+};
+
+export type ClinicalTableStrictFeatureMappingItemV1 = {
+  feature_order: number;
+  model_feature_name: string;
+  source_clinical_field: string;
+  required: boolean;
+  present: boolean;
+  raw_column?: string | null;
+  mapping_status: 'matched' | 'missing' | 'type_error';
+  feature_type: string;
+  unit?: string | null;
+  coercion_status: 'ok' | 'missing' | 'type_error';
+  sample_value?: unknown;
+  coerced_value?: unknown;
+  message?: string | null;
+};
+
+export type ClinicalTableStrictTypeCoercionItemV1 = {
+  feature_order: number;
+  model_feature_name: string;
+  feature_type: string;
+  row_count: number;
+  coercion_status: 'ok' | 'missing' | 'type_error';
+  sample_value?: unknown;
+  coerced_value?: unknown;
+  first_error_row_index?: number | null;
+  message?: string | null;
+};
+
+export type ClinicalTableStrictValidationResponseV1 = {
+  status?: string;
+  route?: string;
+  artifact_id: string;
+  artifact_ref: string;
+  artifact_feature_count: number;
+  artifact_feature_order: string[];
+  feature_mappings: ClinicalTableStrictFeatureMappingItemV1[];
+  type_coercion_results: ClinicalTableStrictTypeCoercionItemV1[];
+  missing_required_features: string[];
+  extra_raw_columns: string[];
+  validation_status: 'ready_for_inference' | 'schema_unverified' | 'insufficient_data_for_assessment';
+  can_create_snapshot: boolean;
+  order_matches_artifact: boolean;
+  failure_reasons: string[];
+  source_type: string;
+  row_count: number;
+  not_for_diagnosis: boolean;
+  shadow_only: boolean;
+  runtime_stub: boolean;
+  limitations: string[];
+};
+
+export type ClinicalTableControlledSnapshotCreateRequestV1 = {
+  raw_columns: string[];
+  rows: Array<Record<string, unknown>>;
+  sample_row: Record<string, unknown>;
+  source_type: 'csv_paste' | 'csv_upload_metadata' | 'manual_entry';
+  trace_id?: string | null;
+  not_for_diagnosis?: boolean;
+  shadow_only?: boolean;
+};
+
+export type ClinicalTableControlledSnapshotCreateResponseV1 = {
+  status?: string;
+  route?: string;
+  artifact_id: string;
+  artifact_ref: string;
+  artifact_feature_count: number;
+  artifact_feature_order: string[];
+  validation_status: 'ready_for_inference' | 'schema_unverified' | 'insufficient_data_for_assessment';
+  can_create_snapshot: boolean;
+  order_matches_artifact: boolean;
+  failure_reasons: string[];
+  source_type: string;
+  row_count: number;
+  not_for_diagnosis: boolean;
+  shadow_only: boolean;
+  runtime_stub: boolean;
+  snapshot_created: boolean;
+  snapshot?: ModelInputSnapshotItem | null;
+  mapped_features: Record<string, unknown>;
+  source_refs: unknown[];
+  doctor_provided_features: unknown[];
+  limitations: string[];
+};
+
 export type ControlledShadowClinicalMlpFold5OneShotRequest = {
   input_snapshot_id: string;
   trace_id?: string | null;
@@ -1525,6 +1619,137 @@ export type ControlledShadowClinicalMlpFold5OneShotResponse = {
   limitations_json?: Record<string, unknown>;
   error_code?: string | null;
 };
+
+function buildClinicalTableStrictValidationMock(caseId: string, payload: ClinicalTableStrictValidationRequestV1): ClinicalTableStrictValidationResponseV1 {
+  const artifactOrder = payload.raw_columns.slice();
+  const sampleRow = payload.sample_row || {};
+  const row = payload.rows[0] || {};
+  const featureMappings: ClinicalTableStrictFeatureMappingItemV1[] = artifactOrder.map((featureName, index) => {
+    const rawValue = (row as Record<string, unknown>)[featureName];
+    const present = rawValue !== undefined && rawValue !== null && rawValue !== '';
+    return {
+      feature_order: index + 1,
+      model_feature_name: featureName,
+      source_clinical_field: featureName,
+      required: true,
+      present,
+      raw_column: featureName,
+      mapping_status: present ? 'matched' : 'missing',
+      feature_type: typeof rawValue === 'number' ? 'numeric' : typeof rawValue === 'boolean' ? 'boolean' : 'categorical',
+      unit: null,
+      coercion_status: present ? 'ok' : 'missing',
+      sample_value: sampleRow[featureName] ?? null,
+      coerced_value: present ? rawValue : null,
+      message: present ? null : 'missing value',
+    };
+  });
+  const missingRequiredFeatures = featureMappings.filter((item) => !item.present).map((item) => item.model_feature_name);
+  const validationStatus = missingRequiredFeatures.length > 0 ? 'insufficient_data_for_assessment' : 'ready_for_inference';
+  return {
+    status: 'ok',
+    route: '/api/v1/cases/' + caseId + '/model-input/clinical-table/validate',
+    artifact_id: 'clinical_tabular_standardization_v1.json',
+    artifact_ref: 'clinical_tabular_standardization_v1.json',
+    artifact_feature_count: artifactOrder.length,
+    artifact_feature_order: artifactOrder,
+    feature_mappings: featureMappings,
+    type_coercion_results: featureMappings.map((item) => ({
+      feature_order: item.feature_order,
+      model_feature_name: item.model_feature_name,
+      feature_type: item.feature_type,
+      row_count: payload.rows.length,
+      coercion_status: item.coercion_status,
+      sample_value: item.sample_value,
+      coerced_value: item.coerced_value,
+      first_error_row_index: item.present ? null : 0,
+      message: item.message,
+    })),
+    missing_required_features: missingRequiredFeatures,
+    extra_raw_columns: [],
+    validation_status: validationStatus,
+    can_create_snapshot: validationStatus === 'ready_for_inference',
+    order_matches_artifact: true,
+    failure_reasons: missingRequiredFeatures.length > 0 ? ['missing_required_features:' + missingRequiredFeatures.join(',')] : [],
+    source_type: payload.source_type,
+    row_count: payload.rows.length,
+    not_for_diagnosis: true,
+    shadow_only: true,
+    runtime_stub: true,
+    limitations: ['not_for_diagnosis', 'shadow_only', 'runtime_stub'],
+  };
+}
+
+function buildClinicalTableSnapshotMock(caseId: string, payload: ClinicalTableControlledSnapshotCreateRequestV1): ClinicalTableControlledSnapshotCreateResponseV1 {
+  const validation = buildClinicalTableStrictValidationMock(caseId, payload);
+  const canCreate = validation.validation_status === 'ready_for_inference';
+  const snapshot = canCreate ? ({
+    id: 'snap_demo_' + caseId,
+    input_snapshot_id: 'snap_demo_' + caseId,
+    case_id: caseId,
+    patient_id: 'patient-demo',
+    trace_id: payload.trace_id || 'trace_demo',
+    model_version_id: 'model-version-demo',
+    model_input_schema_id: 'clinical_mlp_cap_cop_input_schema_v1',
+    disease_task_feature_set_id: 'cap_cop_clinical_feature_set_v1',
+    validation_status: validation.validation_status,
+    current_assessment_status: validation.validation_status,
+    insufficient_data_for_assessment: false,
+    runtime_stub: true,
+    not_for_diagnosis: true,
+    mapped_feature_count: payload.rows.length ? Object.keys(payload.rows[0] || {}).length : 0,
+    missing_feature_count: validation.missing_required_features.length,
+    defaulted_feature_count: 0,
+    doctor_provided_feature_count: payload.rows.length ? Object.keys(payload.rows[0] || {}).length : 0,
+    source_ref_count: payload.rows.length,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    preprocess_artifact_ref: 'clinical_tabular_standardization_v1.json',
+    mapped_features: payload.rows[0] || {},
+    missing_features: validation.missing_required_features,
+    defaulted_features: [],
+    doctor_provided_features: Object.keys(payload.rows[0] || {}),
+    source_refs: payload.rows,
+  } as ModelInputSnapshotItem) : null;
+  return {
+    status: 'ok',
+    route: '/api/v1/cases/' + caseId + '/model-input/clinical-table/snapshots',
+    artifact_id: validation.artifact_id,
+    artifact_ref: validation.artifact_ref,
+    artifact_feature_count: validation.artifact_feature_count,
+    artifact_feature_order: validation.artifact_feature_order,
+    validation_status: validation.validation_status,
+    can_create_snapshot: canCreate,
+    order_matches_artifact: validation.order_matches_artifact,
+    failure_reasons: validation.failure_reasons,
+    source_type: payload.source_type,
+    row_count: payload.rows.length,
+    not_for_diagnosis: true,
+    shadow_only: true,
+    runtime_stub: true,
+    snapshot_created: canCreate,
+    snapshot,
+    mapped_features: payload.rows[0] || {},
+    source_refs: payload.rows,
+    doctor_provided_features: Object.keys(payload.rows[0] || {}),
+    limitations: validation.limitations,
+  };
+}
+
+export async function validateClinicalTableInput(caseId: string, payload: ClinicalTableStrictValidationRequestV1): Promise<ClinicalTableStrictValidationResponseV1> {
+  if (API_MODE === 'mock') {
+    return buildClinicalTableStrictValidationMock(caseId, payload);
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/model-input/clinical-table/validate', payload)).data;
+  return data as ClinicalTableStrictValidationResponseV1;
+}
+
+export async function createClinicalTableSnapshotFromValidation(caseId: string, payload: ClinicalTableControlledSnapshotCreateRequestV1): Promise<ClinicalTableControlledSnapshotCreateResponseV1> {
+  if (API_MODE === 'mock') {
+    return buildClinicalTableSnapshotMock(caseId, payload);
+  }
+  const data = (await client.post('/api/v1/cases/' + caseId + '/model-input/clinical-table/snapshots', payload)).data;
+  return unwrapItem<ClinicalTableControlledSnapshotCreateResponseV1>(data);
+}
 
 export async function getModelInputSchema(modelVersionId: string): Promise<ModelInputSchemaResponse> {
   if (API_MODE === 'mock') {
