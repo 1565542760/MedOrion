@@ -197,6 +197,27 @@ function resolveWorkflowNextAction(caseId: string, nextAction?: string | null) {
   return { label: raw, href: null as string | null, hint: raw };
 }
 
+function getWorkflowGapLabel(key: string, disabledReasons: string[], requiredInputs: string[]) {
+  const reason = disabledReasons[0] || requiredInputs[0] || '';
+  const lower = reason.toLowerCase();
+  if (key === 'clinical_mlp') {
+    if (lower.includes('schema_unverified')) return '临床输入契约待复核';
+    if (lower.includes('snapshot')) return '临床 36 特征快照待补齐';
+    return '临床输入待补齐';
+  }
+  if (key === 'imaging_resnet18') {
+    if (lower.includes('preprocess')) return '影像预处理待完成';
+    if (lower.includes('nifti') || lower.includes('image.nii.gz')) return '需要 image.nii.gz';
+    return '影像输入待补齐';
+  }
+  if (key === 'multimodal_resnet18') {
+    if (lower.includes('schema_unverified')) return '临床输入契约待复核';
+    if (lower.includes('image.nii.gz')) return '临床 + 影像都要先准备好';
+    return '多模态输入待补齐';
+  }
+  return '当前门禁暂不满足';
+}
+
 function stringifyWorkflowList(value: unknown): string[] {
   if (!value) return [];
   if (Array.isArray(value)) return value.map((item) => String(item));
@@ -305,6 +326,7 @@ function buildWorkflowBranchView(caseId: string, key: string, title: string, sou
   const detectedInputs = stringifyWorkflowList(branch.detected_inputs);
   const nextAction = resolveWorkflowNextAction(caseId, typeof branch.next_action === 'string' ? branch.next_action : null);
   const limitations = stringifyWorkflowList(branch.limitations || disabledReasons);
+  const gapLabel = getWorkflowGapLabel(key, disabledReasons, requiredInputs);
   return {
     key,
     title,
@@ -312,6 +334,7 @@ function buildWorkflowBranchView(caseId: string, key: string, title: string, sou
     statusColor: getWorkflowPlanStatusColor(status, canRun),
     canRun,
     disabledReasons,
+    gapLabel,
     requiredInputs: requiredInputs.length ? requiredInputs : [fallbackRequirement],
     detectedInputs,
     nextActionLabel: nextAction.label,
@@ -361,6 +384,7 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
 
   const latestShadowRunId = context.latestShadowRun?.shadow_run_id || '';
   const latestShadowCandidate = context.latestShadowOutput?.candidate_label || '';
+  const innerBlockStyle = { border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff', minWidth: 0 };
   const loadingBanner = loading ? (
     <Alert type='info' showIcon message='病例工作台加载中' description='正在汇总表格输入、影像输入和 Shadow 状态。' />
   ) : null;
@@ -590,7 +614,6 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
   } = workflowGateData;
 
   const workflowPreviewBranches = useMemo(() => (workflowPreview ? normalizeWorkflowBranches(caseId, workflowPreview) : []) as ReturnType<typeof normalizeWorkflowBranches>, [caseId, workflowPreview]);
-  const workflowExecuteBranches = useMemo(() => (workflowExecuteResult ? normalizeWorkflowBranches(caseId, workflowExecuteResult) : []) as ReturnType<typeof normalizeWorkflowBranches>, [caseId, workflowExecuteResult]);
   const workflowActionCanExecute = Boolean(workflowPreview && workflowPreviewBranches.some((branch) => branch.canRun));
 
   const handleWorkflowPreview = async () => {
@@ -640,65 +663,7 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
     });
   };
 
-  const renderWorkflowActionCard = (
-    title: string,
-    mode: 'preview' | 'execute',
-    response: CapCopShadowWorkflowResponse | null,
-    branches: ReturnType<typeof normalizeWorkflowBranches>,
-  ) => {
-    if (!response) return null;
-    const overallStatusLabel = getWorkflowOverallStatusLabel(response.overall_status || response.status || null);
-    const branchSummary = branches.filter((branch) => branch.canRun).map((branch) => branch.title).join(' / ') || '无';
-    const limitations = branches.flatMap((branch) => branch.limitations).filter(Boolean).join('；') || '无';
-    const alertMessage = mode === 'preview'
-      ? 'preview 只会生成 execution plan，不会改变 shadow counts，也不会写 trace / evidence。'
-      : 'execute 只会写 shadow audit，不会写 trace / evidence。';
-    const alertDescription = mode === 'preview'
-      ? '分支会显示 planned / skipped / failed，并标出预计会写入 shadow audit 的分支。'
-      : '分支会显示 executed / skipped / failed，并回填 shadow_run_id / output_id / candidate_label 等结果。';
-    return (
-      <Card size='small' title={title} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-        <Space direction='vertical' size={12} style={{ width: '100%' }}>
-          <Alert type='info' showIcon message={alertMessage} description={alertDescription} />
-          <Descriptions bordered size='small' column={2}>
-            <Descriptions.Item label='overall_status'>{overallStatusLabel}</Descriptions.Item>
-            <Descriptions.Item label='mode'>{mode}</Descriptions.Item>
-            <Descriptions.Item label='可运行分支'>{branchSummary}</Descriptions.Item>
-            <Descriptions.Item label='限制说明'>{limitations}</Descriptions.Item>
-          </Descriptions>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, width: '100%' }}>
-            {branches.map((branch) => (
-              <div key={branch.key} style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff', minWidth: 0 }}>
-                <Space direction='vertical' size={6} style={{ width: '100%' }}>
-                  <Typography.Text type='secondary'>{branch.title}</Typography.Text>
-                  <Space wrap size={6}>
-                    <Tag color={branch.statusColor}>{getWorkflowPlanStatusLabel(branch.status)}</Tag>
-                    <Tag color={branch.canRun ? 'green' : 'default'}>{branch.canRun ? 'can_run=是' : 'can_run=否'}</Tag>
-                  </Space>
-                  <Typography.Text><strong>输入要求：</strong>{branch.requiredInputs.join('；') || '无'}</Typography.Text>
-                  <Typography.Text><strong>当前缺口：</strong>{branch.disabledReasons.join('；') || branch.note || '无'}</Typography.Text>
-                  <Typography.Text><strong>已检测输入：</strong>{branch.detectedInputs.join('；') || '后端未返回'}</Typography.Text>
-                  <Typography.Text><strong>限制说明：</strong>{branch.limitations.join('；') || '无'}</Typography.Text>
-                  {branch.shadowRunId || branch.outputId || branch.candidateLabel ? (
-                    <Descriptions bordered size='small' column={1}>
-                      <Descriptions.Item label='shadow_run_id'>{branch.shadowRunId || '-'}</Descriptions.Item>
-                      <Descriptions.Item label='output_id'>{branch.outputId || '-'}</Descriptions.Item>
-                      <Descriptions.Item label='candidate_label'>{branch.candidateLabel || '-'}</Descriptions.Item>
-                      <Descriptions.Item label='CAP/COP 概率'>{branch.probabilitySummary}</Descriptions.Item>
-                      <Descriptions.Item label='confidence'>{branch.confidenceSummary}</Descriptions.Item>
-                      <Descriptions.Item label='uncertainty'>{branch.uncertaintySummary}</Descriptions.Item>
-                    </Descriptions>
-                  ) : null}
-                  <Typography.Text type='secondary'><strong>下一步：</strong>{branch.nextActionHint}</Typography.Text>
-                  {branch.nextActionHref ? <Link href={branch.nextActionHref}>{branch.nextActionLabel}</Link> : <Typography.Text type='secondary'>{branch.nextActionLabel}</Typography.Text>}
-                </Space>
-              </div>
-            ))}
-          </div>
-        </Space>
-      </Card>
-    );
-  };
+
 
   return (
     <Space direction='vertical' size={16} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
@@ -706,32 +671,51 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
       <Card size='small' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
         <Space direction='vertical' size={12} style={{ width: '100%' }}>
           <Space wrap size={8}>
-            <Typography.Title level={5} style={{ margin: 0 }}>一键 CAP/COP shadow workflow</Typography.Title>
+            <Typography.Title level={5} style={{ margin: 0 }}>病例摘要与门禁</Typography.Title>
             <Tag color={workflowFullyReady ? 'green' : workflowAnyReady ? 'blue' : 'red'}>{workflowGateLabel}</Tag>
             <Tag color='gold'>Shadow only</Tag>
             <Tag color='gold'>非诊断</Tag>
             <Tag color='gold'>非正式推荐</Tag>
           </Space>
+          <Descriptions bordered size='small' column={2}>
+            {headerSummary.map((item) => (
+              <Descriptions.Item label={item.label} key={item.label}>{item.value}</Descriptions.Item>
+            ))}
+          </Descriptions>
+          <Alert
+            type='info'
+            showIcon
+            message='仅用于科研与辅助评估，不作为临床诊断依据'
+            description={context.caseItem?.chief_complaint ? `主诉：${context.caseItem.chief_complaint}` : '病例工作台把患者摘要、输入状态、模型可运行性和下一步入口收拢在一屏。'}
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, width: '100%' }}>
+            {workflowBranches.map((item) => (
+              <div key={item.title} style={innerBlockStyle}>
+                <Space direction='vertical' size={6} style={{ width: '100%' }}>
+                  <Space wrap size={6}>
+                    <Typography.Text strong>{item.title}</Typography.Text>
+                    <Tag color={item.canRun ? 'green' : 'default'}>{item.canRun ? '可运行' : '不可运行'}</Tag>
+                    <Tag color={item.canRun ? 'green' : 'gold'}>{item.info.state}</Tag>
+                  </Space>
+                  <Typography.Text type='secondary'>输入要求：{item.info.requirement}</Typography.Text>
+                  <Typography.Text>缺什么：{item.disabledReasons.join('；') || item.info.note || '无'}</Typography.Text>
+                  <Typography.Text type='secondary'>下一步：{item.nextHint}</Typography.Text>
+                  {item.info.nextHref ? <Link href={item.info.nextHref}>{item.info.nextLabel}</Link> : <Typography.Text type='secondary'>{item.info.nextLabel}</Typography.Text>}
+                </Space>
+              </div>
+            ))}
+          </div>
           <Alert
             type={workflowAnyReady ? 'info' : 'warning'}
             showIcon
-            message={workflowFullyReady ? 'workflow 门禁已通过，可先预览再确认执行。' : workflowAnyReady ? 'workflow 仅部分分支可运行，请先预览再确认执行。' : 'workflow 门禁未通过。'}
+            message={workflowFullyReady ? '门禁已满足，可先预览再确认执行。' : workflowAnyReady ? '部分分支可运行，请先预览再确认执行。' : '当前还不能执行模型评估。'}
             description={workflowGateMessage}
           />
-          <Space wrap size={8}>
-            <Button type='primary' loading={workflowPreviewLoading} onClick={handleWorkflowPreview}>预览 CAP/COP shadow workflow</Button>
-            <Button disabled={!workflowPreview || !workflowActionCanExecute} loading={workflowExecuteLoading} onClick={handleWorkflowExecute}>确认执行 shadow workflow</Button>
-          </Space>
-          <Typography.Text type='secondary'>
-            preview 只会生成 execution plan，不会改变 shadow counts，也不会写 trace / evidence；execute 只会写 shadow audit，不会写 trace / evidence。
-          </Typography.Text>
-          {workflowPreviewError ? <Alert type='error' showIcon message={workflowPreviewError} /> : null}
-          {workflowExecuteError ? <Alert type='error' showIcon message={workflowExecuteError} /> : null}
           {workflowGateBlockers.length > 0 ? (
             <Alert
               type='warning'
               showIcon
-              message='workflow 门禁阻塞原因'
+              message='为什么现在不能运行'
               description={(
                 <ul style={{ margin: 0, paddingLeft: 20 }}>
                   {workflowGateBlockers.map((reason) => <li key={reason}>{reason}</li>)}
@@ -739,28 +723,32 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
               )}
             />
           ) : null}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, width: '100%' }}>
-            {workflowBranches.map((item) => (
-              <div key={item.title} style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff', minWidth: 0 }}>
-                <Space direction='vertical' size={6} style={{ width: '100%' }}>
-                  <Typography.Text type='secondary'>{item.title}</Typography.Text>
-                  <Space wrap size={6}>
-                    <Tag color={item.info.stateColor}>{item.info.state}</Tag>
-                    <Tag color={item.canRun ? 'green' : 'default'}>{item.canRun ? '可运行' : '已跳过'}</Tag>
-                  </Space>
-                  <Typography.Text><strong>输入要求：</strong>{item.info.requirement}</Typography.Text>
-                  <Typography.Text><strong>当前缺口：</strong>{item.info.gap}</Typography.Text>
-                  <Typography.Text><strong>已检测输入：</strong>{item.detectedInputs.join('；') || '后端未返回'}</Typography.Text>
-                  <Typography.Text type='secondary'><strong>下一步：</strong>{item.info.note}</Typography.Text>
-                  {item.info.nextHref ? <Link href={item.info.nextHref}>{item.nextHint}</Link> : <Typography.Text type='secondary'>{item.nextHint}</Typography.Text>}
-                </Space>
-              </div>
-            ))}
-          </div>
-          {renderWorkflowActionCard('预览 CAP/COP shadow workflow', 'preview', workflowPreview, workflowPreviewBranches)}
-          {renderWorkflowActionCard('执行 CAP/COP shadow workflow', 'execute', workflowExecuteResult, workflowExecuteBranches)}
+          <Space wrap size={8}>
+            <Button type='primary' loading={workflowPreviewLoading} onClick={handleWorkflowPreview}>预览模型评估流程</Button>
+            <Button disabled={!workflowPreview || !workflowActionCanExecute} loading={workflowExecuteLoading} onClick={handleWorkflowExecute}>确认执行模型评估流程</Button>
+          </Space>
+          <Typography.Text type='secondary'>执行按钮会在预览后解锁；执行仅写审计记录，不作为正式结果。</Typography.Text>
+          {workflowPreviewError ? <Alert type='error' showIcon message={workflowPreviewError} /> : null}
+          {workflowExecuteError ? <Alert type='error' showIcon message={workflowExecuteError} /> : null}
+          {workflowPreview ? (
+            <Alert
+              type='success'
+              showIcon
+              message={'预览结果：' + getWorkflowPlanStatusLabel(workflowPreview.overall_status || workflowPreview.status || null)}
+              description='预览只生成执行计划，不会改变审计记录。'
+            />
+          ) : null}
+          {workflowExecuteResult ? (
+            <Alert
+              type='success'
+              showIcon
+              message={'执行结果：' + getWorkflowPlanStatusLabel(workflowExecuteResult.overall_status || workflowExecuteResult.status || null)}
+              description='执行结果仍然只写审计记录。'
+            />
+          ) : null}
         </Space>
       </Card>
+
 
 
       <Tabs
@@ -771,20 +759,15 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
             label: '总览',
             children: (
               <Space direction='vertical' size={12} style={{ width: '100%' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, width: '100%' }}>
-                  {headerSummary.map((item) => (
-                    <div key={item.label} style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
-                      <Space direction='vertical' size={4}>
-                        <Typography.Text type='secondary'>{item.label}</Typography.Text>
-                        <Typography.Text strong>{item.value}</Typography.Text>
-                      </Space>
-                    </div>
-                  ))}
-                </div>
-                <Typography.Text type='secondary'>按医生工作流把病例状态收拢在一层里看，不把技术状态直接堆成主视觉。</Typography.Text>
+                <Alert
+                  type='info'
+                  showIcon
+                  message='一屏只看摘要'
+                  description='更细的表格、输入映射、审计与技术字段都留在对应页面。'
+                />
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, width: '100%' }}>
                   {overviewCards.map((item) => (
-                    <div key={item.title} style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
+                    <div key={item.title} style={innerBlockStyle}>
                       <Space direction='vertical' size={4}>
                         <Typography.Text type='secondary'>{item.title}</Typography.Text>
                         <Tag color='blue'>{item.badge}</Tag>
@@ -793,6 +776,53 @@ export default function CaseWorkbenchPage({ params }: { params: Promise<{ caseId
                     </div>
                   ))}
                 </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, width: '100%' }}>
+                  <div style={innerBlockStyle}>
+                    <Space direction='vertical' size={6} style={{ width: '100%' }}>
+                      <Typography.Text type='secondary'>最近的临床模型概要</Typography.Text>
+                      {context.latestShadowRun ? (
+                        <>
+                          <Tag color='green'>{getImagingStatusLabel(context.latestShadowRun.status)}</Tag>
+                          <Typography.Text>候选标签：{context.latestShadowOutput?.candidate_label || '暂无'}</Typography.Text>
+                          <Typography.Text>概率：{context.latestShadowOutput ? getWorkflowProbabilitySummary(context.latestShadowOutput.prediction_probability_json) : '暂无'}</Typography.Text>
+                          <Typography.Text type='secondary'>时间：{context.latestShadowRun.started_at || context.latestShadowRun.created_at || '-'}</Typography.Text>
+                          <Link href={latestShadowRunId ? '/cases/' + caseId + '/shadow-audit?shadow_run_id=' + latestShadowRunId : '/cases/' + caseId + '/shadow-audit'}>查看审计</Link>
+                        </>
+                      ) : (
+                        <Typography.Text type='secondary'>暂无记录，请先补齐输入。</Typography.Text>
+                      )}
+                    </Space>
+                  </div>
+                  <div style={innerBlockStyle}>
+                    <Space direction='vertical' size={6} style={{ width: '100%' }}>
+                      <Typography.Text type='secondary'>最近的影像模型概要</Typography.Text>
+                      {context.latestImagingRun ? (
+                        <>
+                          <Tag color={context.latestImagingRun.status === 'shadow_success' && context.latestImagingOutput ? 'green' : 'gold'}>{getImagingStatusLabel(context.latestImagingRun.status)}</Tag>
+                          <Typography.Text>候选标签：{context.latestImagingOutput ? getImagingCandidateSummary(context.latestImagingOutput.candidate_label) : '暂无'}</Typography.Text>
+                          <Typography.Text>概率：{context.latestImagingOutput ? getWorkflowProbabilitySummary(context.latestImagingOutput.prediction_probability_json) : '暂无'}</Typography.Text>
+                          <Typography.Text type='secondary'>时间：{context.latestImagingRun.started_at || context.latestImagingRun.created_at || '-'}</Typography.Text>
+                          <Link href={'/cases/' + caseId + '/shadow-audit?shadow_run_id=' + context.latestImagingRun.shadow_run_id}>查看审计</Link>
+                        </>
+                      ) : (
+                        <Typography.Text type='secondary'>暂无影像结果，请先进入影像输入页面。</Typography.Text>
+                      )}
+                    </Space>
+                  </div>
+                  <div style={innerBlockStyle}>
+                    <Space direction='vertical' size={6} style={{ width: '100%' }}>
+                      <Typography.Text type='secondary'>多模态概要</Typography.Text>
+                      <Tag color='default'>暂未接入</Tag>
+                      <Typography.Text>临床与影像都初步具备后，再测试多模态评估。</Typography.Text>
+                    </Space>
+                  </div>
+                </div>
+                <Space wrap size={8}>
+                  <Link href={'/cases/' + caseId + '/model-input'}>进入临床表格</Link>
+                  <Link href={'/cases/' + caseId + '/imaging-inputs'}>进入影像输入</Link>
+                  <Link href={'/cases/' + caseId + '/shadow-audit'}>进入审计溢源</Link>
+                  <Link href={'/cases/' + caseId + '/lineage'}>进入 Trace / 源头</Link>
+                </Space>
               </Space>
             ),
           },
