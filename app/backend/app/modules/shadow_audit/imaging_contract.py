@@ -18,6 +18,7 @@ IMAGING_PREPROCESSING_EXECUTION_MODE_DRY_RUN = "dry_run"
 IMAGING_MANAGED_PREPROCESSING_WORKSPACE_ROOT = Path("/srv/medorion/workspaces/imaging_preprocessing")
 
 IMAGING_PREPROCESSING_STATUS_PENDING = "pending"
+IMAGING_PREPROCESSING_STATUS_UPLOADED = "uploaded"
 IMAGING_PREPROCESSING_STATUS_READY = "ready_for_preprocessing"
 IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED = "already_preprocessed_candidate"
 IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED = "not_implemented"
@@ -132,6 +133,8 @@ def classify_imaging_preprocessing_candidate(input_row: Any) -> dict[str, Any]:
 
     if recorded_status == IMAGING_PREPROCESSING_STATUS_COMPLETED:
         candidate_kind = IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED
+    elif recorded_status == IMAGING_PREPROCESSING_STATUS_UPLOADED:
+        candidate_kind = IMAGING_SOURCE_FORMAT_DICOM_SERIES
     elif source_format == IMAGING_SOURCE_FORMAT_DICOM_SERIES or _looks_like_dicom_directory(storage_uri):
         candidate_kind = IMAGING_SOURCE_FORMAT_DICOM_SERIES
     elif preprocessed_format in {IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ, "synthetic_fixture"} or _looks_like_nifti_reference(storage_uri):
@@ -143,6 +146,7 @@ def classify_imaging_preprocessing_candidate(input_row: Any) -> dict[str, Any]:
         IMAGING_PREPROCESSING_STATUS_COMPLETED,
         IMAGING_PREPROCESSING_STATUS_FAILED,
         IMAGING_PREPROCESSING_STATUS_RUNNING,
+        IMAGING_PREPROCESSING_STATUS_UPLOADED,
     }:
         preprocessing_status = recorded_status
     elif candidate_kind == IMAGING_SOURCE_FORMAT_DICOM_SERIES:

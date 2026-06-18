@@ -1,14 +1,23 @@
-'use client';
+﻿'use client';
 
-import CaseEntryLanding from '@/components/CaseEntryLanding';
+import Link from 'next/link';
+import { Card, Space, Typography } from 'antd';
 
 export default function Page() {
   return (
-    <CaseEntryLanding
-      title={'\u533b\u751f\u53cd\u9988\u5165\u53e3'}
-      subtitle={'\u53cd\u9988\u529f\u80fd\u662f\u75c5\u4f8b\u7ea7\u5de5\u4f5c\u6d41\u7684\u4e00\u90e8\u5206\uff0c\u9700\u8981\u5148\u9009\u62e9\u75c5\u4f8b\u3002'}
-      note={'\u8bf7\u5148\u8fdb\u5165\u75c5\u4f8b\u5217\u8868\u9009\u62e9\u4e00\u4e2a\u75c5\u4f8b\uff0c\u518d\u56de\u5230\u5bf9\u5e94\u75c5\u4f8b\u9875\u586b\u5199\u53cd\u9988\u5e76\u67e5\u770b\u6eaf\u6e90\u3002'}
-      bullets={['\u53cd\u9988\u7684\u4e3b\u5de5\u4f5c\u533a\u5728 /cases/{case_id}/feedback\u3002', '\u533b\u751f\u53cd\u9988\u4f1a\u4e0e trace \u3001recommendation \u7ed1\u5b9a\u3002', '\u63d0\u4ea4\u540e\u53ef\u4ee5\u7ee7\u7eed\u8fdb\u5165\u8d28\u63a7\u5ba1\u67e5\u9875\u3002']}
-    />
+    <main style={{ padding: 24, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+      <Space direction='vertical' size={16} style={{ width: '100%' }}>
+        <Space direction='vertical' size={4}>
+          <Typography.Title level={3} style={{ margin: 0 }}>医生反馈</Typography.Title>
+          <Typography.Text type='secondary'>反馈功能收敛到病例内操作，不再作为主导航入口。</Typography.Text>
+        </Space>
+        <Card title='入口说明'>
+          <Space direction='vertical' size={8}>
+            <Typography.Text>请先进入具体病例，在病例页内提交反馈、查看 trace 和推荐关联。</Typography.Text>
+            <Link href='/cases'>去患者/病例列表</Link>
+          </Space>
+        </Card>
+      </Space>
+    </main>
   );
 }

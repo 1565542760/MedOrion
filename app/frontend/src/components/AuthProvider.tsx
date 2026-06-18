@@ -1,20 +1,19 @@
 'use client';
 
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Spin } from 'antd';
 import {
   CurrentUser,
   clearAuthTokens,
   getCurrentUser,
   login as apiLogin,
   logout as apiLogout,
-  readCurrentUser,
   refreshToken as apiRefreshToken,
 } from '@/lib/api';
 
 type AuthContextValue = {
   loading: boolean;
+  hydrated: boolean;
   isAuthenticated: boolean;
   currentUser: CurrentUser | null;
   login: (username: string, password: string) => Promise<void>;
@@ -24,7 +23,9 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const protectedPrefixes = ['/dashboard', '/cases', '/models', '/learning-library', '/feedback', '/quality-reviews', '/lineage'];
+const protectedPrefixes = ['/dashboard', '/cases', '/model-workflow', '/audit', '/quality-reviews', '/models', '/settings', '/feedback', '/lineage'];
+const DEV_AUTO_LOGIN_USERNAME = process.env.NEXT_PUBLIC_DEV_AUTO_LOGIN_USERNAME || 'dev_doctor';
+const DEV_AUTO_LOGIN_PASSWORD = process.env.NEXT_PUBLIC_DEV_AUTO_LOGIN_PASSWORD || '123456';
 
 function isProtectedPath(pathname: string) {
   return protectedPrefixes.some((prefix) => pathname.startsWith(prefix));
@@ -33,67 +34,104 @@ function isProtectedPath(pathname: string) {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const attemptedDevAutoLoginRef = useRef(false);
+  const [hydrated, setHydrated] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => readCurrentUser());
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   useEffect(() => {
-    getCurrentUser()
-      .then((user) => {
+    let active = true;
+
+    const bootstrapAuth = async () => {
+      setLoading(true);
+      try {
+        const user = await getCurrentUser();
+        if (!active) return;
         setCurrentUser(user);
-      })
-      .catch(async () => {
+        return;
+      } catch {
+        if (!active) return;
         try {
           await apiRefreshToken();
           const user = await getCurrentUser();
+          if (!active) return;
           setCurrentUser(user);
+          return;
         } catch {
-          clearAuthTokens();
+          if (!active) return;
+          const shouldAutoLogin = pathname !== '/login'
+            && isProtectedPath(pathname)
+            && !attemptedDevAutoLoginRef.current;
+
+          if (shouldAutoLogin) {
+            attemptedDevAutoLoginRef.current = true;
+            try {
+              await apiLogin(DEV_AUTO_LOGIN_USERNAME, DEV_AUTO_LOGIN_PASSWORD);
+              const user = await getCurrentUser();
+              if (!active) return;
+              setCurrentUser(user);
+              return;
+            } catch {
+              clearAuthTokens();
+            }
+          } else {
+            clearAuthTokens();
+          }
+
+          if (!active) return;
           setCurrentUser(null);
         }
-      })
-      .finally(() => setLoading(false));
-  }, []);
+      } finally {
+        if (!active) return;
+        setHydrated(true);
+        setLoading(false);
+      }
+    };
+
+    void bootstrapAuth();
+
+    return () => {
+      active = false;
+    };
+  }, [pathname]);
 
   useEffect(() => {
-    if (loading) return;
+    if (!hydrated || loading) return;
     const protectedPath = isProtectedPath(pathname);
-    if (!currentUser && protectedPath) {
+    if (!currentUser && protectedPath && pathname !== '/login') {
       router.replace('/login');
       return;
     }
     if (currentUser && pathname === '/login') {
       router.replace('/dashboard');
     }
-  }, [loading, currentUser, pathname, router]);
+  }, [hydrated, loading, currentUser, pathname, router]);
 
   const value = useMemo<AuthContextValue>(() => ({
     loading,
+    hydrated,
     isAuthenticated: !!currentUser,
     currentUser,
     login: async (username: string, password: string) => {
       await apiLogin(username, password);
       const user = await getCurrentUser();
       setCurrentUser(user);
+      setHydrated(true);
+      setLoading(false);
     },
     logout: async () => {
       await apiLogout();
       setCurrentUser(null);
+      setHydrated(true);
+      setLoading(false);
     },
     reloadCurrentUser: async () => {
       const user = await getCurrentUser();
       setCurrentUser(user);
+      setHydrated(true);
+      setLoading(false);
     },
-  }), [loading, currentUser]);
-
-  if (loading && isProtectedPath(pathname)) {
-    return (
-      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
-        <Spin spinning tip='正在检查登录状态...'>
-          <div style={{ width: 320, height: 80 }} />
-        </Spin>
-      </div>
-    );
-  }
+  }), [hydrated, loading, currentUser]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

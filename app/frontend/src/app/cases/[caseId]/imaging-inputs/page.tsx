@@ -1,705 +1,325 @@
 'use client';
 
-import Link from 'next/link';
-import { use, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Col, Descriptions, Form, Input, Row, Select, Space, Table, Tag, Typography } from 'antd';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import { Alert, Button, Descriptions, Drawer, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { CaseSubNav } from '@/components/CaseSubNav';
+import { WorkspaceTableShell } from '@/components/WorkspaceTableShell';
 import {
-  createCaseImagingInput,
-  getCaseImagingInput,
+  formatApiErrorMessage,
   getImagingPreprocessingStatus,
+  type ImagingPreprocessResponse,
   listCaseImagingInputs,
   listCases,
-  listModelInputSnapshotsByCase,
-  listShadowRunsByCase,
+  listPatients,
   registerDicomSeries,
   requestImagingPreprocess,
+  uploadDicomSeriesFiles,
   type CaseImagingInputItem,
   type CaseItem,
   type DicomSeriesRegisterPayload,
   type ImagingPreprocessingStatusResponse,
-  type ModelInputSnapshotSummaryItem,
-  type ShadowInferenceRunItem,
+  type PatientItem,
 } from '@/lib/api';
 
-type ImagingFormValues = {
-  trace_id?: string;
-  modality?: string;
-  source_type?: string;
-  storage_uri?: string;
-  provenance_json?: string;
-  quality_flags_json?: string;
-};
+type DicomFormValues = { series_label?: string; source_type?: string; dicom_series_ref?: string; storage_uri?: string };
+type DicomUploadValues = { modality?: string; source_type?: string };
 
-type DicomSeriesFormValues = {
-  series_label?: string;
-  source_type?: string;
-  dicom_series_ref?: string;
-  storage_uri?: string;
-  provenance_json?: string;
-  quality_flags_json?: string;
-};
-
-function safeParseJson(text?: string) {
-  const trimmed = (text || '').trim();
-  if (!trimmed) return {};
-  try {
-    return JSON.parse(trimmed) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+function patientName(patient: PatientItem | null) {
+  return patient?.display_name || patient?.external_patient_id || '未命名患者';
 }
 
-function prettyJson(value: unknown) {
-  return JSON.stringify(value ?? {}, null, 2);
+function patientId(patient: PatientItem | null, caseItem: CaseItem | null) {
+  return patient?.external_patient_id || caseItem?.patient_id || '-';
 }
 
-function getModalityLabel(value?: string | null) {
-  switch (value || '') {
-    case 'CT':
-      return 'CT';
-    case 'NIfTI':
-      return 'NIfTI';
-    case 'demo_image':
-      return '演示影像';
-    case 'synthetic_visual_sample':
-      return '合成影像样本';
-    default:
-      return value || '-';
-  }
-}
-
-function getSourceTypeLabel(value?: string | null) {
-  switch (value || '') {
-    case 'real_deidentified':
-      return '脱敏真实影像';
-    case 'synthetic':
-      return '合成样本';
-    case 'demo':
-      return '课程演示';
-    default:
-      return value || '-';
-  }
-}
-
-function getTwinLabel(count: number, shadowCount: number) {
-  if (count > 0 && shadowCount > 0) return '课程演示 twin 可查看';
-  if (count > 0) return '影像输入已登记';
-  return '待建立';
-}
-
-function getBaselineLabel(count: number) {
-  if (count > 0) return '表格 baseline 已建立';
-  return '表格 baseline 待建立';
-}
-
-function getShadowLabel(count: number) {
-  if (count > 0) return 'Shadow 已就绪';
-  return 'Shadow 待建立';
-}
-
-function getImagingStateLabel(count: number) {
-  if (count > 0) return '已登记';
-  return '待登记';
-}
-
-function renderJsonBlock(value: unknown) {
-  return (
-    <pre
-      style={{
-        margin: 0,
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        background: '#fafafa',
-        border: '1px solid #f0f0f0',
-        borderRadius: 6,
-        padding: 12,
-        maxWidth: '100%',
-      }}
-    >
-      {prettyJson(value)}
-    </pre>
-  );
-}
-
-function getPreprocessingStatusLabel(value?: string | null) {
+function sourceLabel(value?: string | null) {
   switch ((value || '').toLowerCase()) {
-    case 'pending':
-      return '待预处理';
-    case 'completed':
-      return '预处理完成';
-    case 'failed':
-      return '预处理失败';
-    case 'not_implemented':
-      return '预处理未实现';
-    default:
-      return value || '-';
+    case 'dicom_series': return '登记影像序列（DICOM）';
+    case 'real_deidentified': return '真实脱敏影像';
+    case 'synthetic': return '合成/演示影像';
+    case 'demo': return '演示数据';
+    default: return value || '-';
   }
 }
 
-export default function Page({ params }: { params: Promise<{ caseId: string }> }) {
-  const { caseId } = use(params);
-  const [form] = Form.useForm<ImagingFormValues>();
-  const [dicomForm] = Form.useForm<DicomSeriesFormValues>();
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
-  const [messageType, setMessageType] = useState<'success' | 'info' | 'warning' | 'error'>('info');
-  const [caseRecord, setCaseRecord] = useState<CaseItem | null>(null);
+function workflowStatusLabel(row: CaseImagingInputItem, status?: ImagingPreprocessingStatusResponse) {
+  const preprocessingStatus = (status?.preprocessing_status || '').toLowerCase();
+  const responseStatus = (status?.status || '').toLowerCase();
+  const uploadState = String((status?.provenance_json as Record<string, unknown> | undefined)?.upload_state || (row.provenance_json as Record<string, unknown> | undefined)?.upload_state || '').toLowerCase();
+  if (preprocessingStatus === 'completed' || responseStatus === 'completed') return '预处理完成，可运行';
+  if (preprocessingStatus === 'failed' || responseStatus === 'failed') return '预处理失败';
+  if (preprocessingStatus === 'running' || preprocessingStatus === 'processing' || responseStatus === 'running' || responseStatus === 'processing') return '真实执行中';
+  if (preprocessingStatus === 'planned' || preprocessingStatus === 'ready_for_preprocessing' || responseStatus === 'planned' || responseStatus === 'ready_for_preprocessing') return '预处理计划已生成，等待执行';
+  if (preprocessingStatus === 'not_implemented' || responseStatus === 'not_implemented') return '预处理契约未实现';
+  if (uploadState === 'uploaded_to_controlled_storage') return '已上传，等待预处理';
+  return '待处理';
+}
+
+function workflowStatusColor(label: string) {
+  if (label.includes('完成') || label.includes('可运行')) return 'green';
+  if (label.includes('失败')) return 'red';
+  if (label.includes('未实现') || label.includes('待')) return 'gold';
+  return 'blue';
+}
+
+function uploadManifestSummary(status?: ImagingPreprocessingStatusResponse) {
+  const provenance = status?.provenance_json as { upload_manifest?: Array<{ filename?: string }> } | undefined;
+  const manifest = provenance?.upload_manifest || [];
+  if (!manifest.length) return '-';
+  return manifest.slice(0, 4).map((item) => item.filename || '-').join('、') + (manifest.length > 4 ? ' 等' : '');
+}
+export default function ImagingInputsPage() {
+  const pathname = usePathname();
+  const caseId = useMemo(() => pathname.match(/^\/cases\/([^/]+)/)?.[1] || '', [pathname]);
+  const [registerForm] = Form.useForm<DicomFormValues>();
+  const [uploadForm] = Form.useForm<DicomUploadValues>();
+  const [caseItem, setCaseItem] = useState<CaseItem | null>(null);
+  const [patient, setPatient] = useState<PatientItem | null>(null);
   const [items, setItems] = useState<CaseImagingInputItem[]>([]);
-  const [details, setDetails] = useState<Record<string, CaseImagingInputItem>>({});
-  const [snapshots, setSnapshots] = useState<ModelInputSnapshotSummaryItem[]>([]);
-  const [shadowRuns, setShadowRuns] = useState<ShadowInferenceRunItem[]>([]);
-  const [preprocessingStatusMap, setPreprocessingStatusMap] = useState<Record<string, ImagingPreprocessingStatusResponse>>({});
+  const [statuses, setStatuses] = useState<Record<string, ImagingPreprocessingStatusResponse>>({});
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState('');
+  const [message, setMessage] = useState('');
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploadTraceId, setUploadTraceId] = useState('');
+  const [uploadStage, setUploadStage] = useState('');
+  const [detail, setDetail] = useState<CaseImagingInputItem | null>(null);
 
-  const demoValues = useMemo(() => ({
-    trace_id: caseRecord?.trace_id || 'trace-demo',
-    modality: 'CT',
-    source_type: 'demo',
-    storage_uri: 'managed://coursework-demo/' + caseId + '/ct-series-01',
-    provenance_json: JSON.stringify({
-      origin: 'coursework-demo',
-      capture_mode: 'manual-registration',
-      source_case_link: caseId,
-    }, null, 2),
-    quality_flags_json: JSON.stringify({
-      artifact_free: true,
-      slice_count_ok: true,
-      orientation_ok: true,
-    }, null, 2),
-  }), [caseId, caseRecord?.trace_id]);
-
-  const dicomDemoValues = useMemo(() => ({
-    series_label: 'DICOM series demo',
-    source_type: 'synthetic',
-    dicom_series_ref: 'managed://coursework-demo/' + caseId + '/dicom-series-01',
-    storage_uri: 'managed://coursework-demo/' + caseId + '/dicom-series-01',
-    provenance_json: JSON.stringify({
-      source_format: 'dicom_series',
-      capture_mode: 'metadata_only',
-      deidentified: true,
-      not_for_diagnosis: true,
-      source_case_link: caseId,
-    }, null, 2),
-    quality_flags_json: JSON.stringify({
-      preprocessed_format: 'nifti_nii_gz',
-      preprocessing_script: 'dcmtonii_N4.py',
-      conversion_tool: 'dcm2niix',
-      bias_correction: 'N4BiasFieldCorrection',
-    }, null, 2),
-  }), [caseId]);
-
-  async function loadPageState() {
+  const load = useCallback(async () => {
     setLoading(true);
+    setMessage('');
     try {
-      const [casesResult, imagingResult, snapshotResult, shadowResult] = await Promise.allSettled([
-        listCases(),
-        listCaseImagingInputs(caseId),
-        listModelInputSnapshotsByCase(caseId),
-        listShadowRunsByCase(caseId),
-      ]);
+      const imaging = await listCaseImagingInputs(caseId);
+      const rows = (imaging.items || []) as CaseImagingInputItem[];
+      setItems(rows);
 
-      const caseItem = casesResult.status === 'fulfilled'
-        ? (casesResult.value || []).find((item) => item.case_id === caseId) || null
-        : null;
-      const imagingItems = imagingResult.status === 'fulfilled' ? imagingResult.value.items || [] : [];
-      const snapshotItems = snapshotResult.status === 'fulfilled' ? snapshotResult.value.items || [] : [];
-      const shadowItems = shadowResult.status === 'fulfilled' ? shadowResult.value.items || [] : [];
+      const [casesResult, patientsResult] = await Promise.allSettled([listCases(), listPatients()]);
+      const foundCases = casesResult.status === 'fulfilled' ? casesResult.value : [];
+      const foundPatients = patientsResult.status === 'fulfilled' ? patientsResult.value : [];
+      const firstRow = rows[0] || null;
+      const foundCase = (foundCases || []).find((item: CaseItem) => item.case_id === caseId) || (firstRow ? { case_id: caseId, patient_id: firstRow.patient_id || '', case_no: null, disease_task: 'cap_cop', status: 'open', trace_id: firstRow.trace_id || null } as CaseItem : null);
+      setCaseItem(foundCase);
+      const resolvedPatientId = foundCase?.patient_id || firstRow?.patient_id || '';
+      setPatient((foundPatients || []).find((item: PatientItem) => item.patient_id === resolvedPatientId) || null);
 
-      setCaseRecord(caseItem);
-      setItems(imagingItems);
-      setSnapshots(snapshotItems);
-      setShadowRuns(shadowItems);
-
-      if (imagingItems.length > 0) {
-        setDetails((current) => ({ ...current, ...Object.fromEntries(imagingItems.map((item) => [item.input_asset_id, item])) }));
-      }
+      const pairs = await Promise.all(rows.map(async (row) => {
+        try { return [row.input_asset_id, await getImagingPreprocessingStatus(row.input_asset_id)] as const; } catch { return [row.input_asset_id, null] as const; }
+      }));
+      setStatuses(Object.fromEntries(pairs.filter(([, value]) => !!value)) as Record<string, ImagingPreprocessingStatusResponse>);
     } catch {
-      setMessageType('error');
-      setMessage('影像输入页面加载失败，请确认后端服务和登录状态。');
+      setMessage('影像输入页加载失败，请稍后重试。');
+      setItems([]);
+      setStatuses({});
     } finally {
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    let active = true;
-    void (async () => {
-      try {
-        const [casesResult, imagingResult, snapshotResult, shadowResult] = await Promise.allSettled([
-          listCases(),
-          listCaseImagingInputs(caseId),
-          listModelInputSnapshotsByCase(caseId),
-          listShadowRunsByCase(caseId),
-        ]);
-
-        if (!active) return;
-
-        const caseItem = casesResult.status === 'fulfilled'
-          ? (casesResult.value || []).find((item) => item.case_id === caseId) || null
-          : null;
-        const imagingItems = imagingResult.status === 'fulfilled' ? imagingResult.value.items || [] : [];
-        const snapshotItems = snapshotResult.status === 'fulfilled' ? snapshotResult.value.items || [] : [];
-        const shadowItems = shadowResult.status === 'fulfilled' ? shadowResult.value.items || [] : [];
-        const preprocessingEntries = await Promise.allSettled(
-          imagingItems.map(async (item) => [item.input_asset_id, await getImagingPreprocessingStatus(item.input_asset_id)] as const),
-        );
-        const preprocessingMap: Record<string, ImagingPreprocessingStatusResponse> = {};
-        preprocessingEntries.forEach((entry) => {
-          if (entry.status === 'fulfilled') {
-            const [assetId, status] = entry.value;
-            preprocessingMap[assetId] = status;
-          }
-        });
-
-        setCaseRecord(caseItem);
-        setItems(imagingItems);
-        setSnapshots(snapshotItems);
-        setShadowRuns(shadowItems);
-        setPreprocessingStatusMap(preprocessingMap);
-
-        if (imagingItems.length > 0) {
-          setDetails((current) => ({ ...current, ...Object.fromEntries(imagingItems.map((item) => [item.input_asset_id, item])) }));
-        }
-      } catch {
-        if (!active) return;
-        setMessageType('error');
-        setMessage('影像输入页面加载失败，请确认后端服务和登录状态。');
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
   }, [caseId]);
 
-  async function handleSubmit(values: ImagingFormValues) {
-    setSaving(true);
-    setMessage('');
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
-    const provenanceJson = safeParseJson(values.provenance_json);
-    if (provenanceJson === null) {
-      setMessageType('error');
-      setMessage('provenance_json 不是合法 JSON，请先修正后再保存。');
-      setSaving(false);
-      return;
-    }
+  function openUpload() {
+    const traceId = caseItem?.trace_id || (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : 'trace-' + Date.now().toString(36));
+    setUploadTraceId(traceId);
+    uploadForm.setFieldsValue({ modality: 'CT', source_type: 'real_deidentified' });
+    setUploadFiles([]);
+    setUploadStage('');
+    setUploadOpen(true);
+  }
 
-    const qualityFlagsJson = safeParseJson(values.quality_flags_json);
-    if (qualityFlagsJson === null) {
-      setMessageType('error');
-      setMessage('quality_flags_json 不是合法 JSON，请先修正后再保存。');
-      setSaving(false);
-      return;
-    }
+  function openRegister() {
+    registerForm.setFieldsValue({ source_type: 'dicom_series', series_label: 'DICOM 影像序列', dicom_series_ref: '', storage_uri: '' });
+    setRegisterOpen(true);
+  }
 
+  async function handleUpload(values: DicomUploadValues) {
+    const resolvedPatientId = caseItem?.patient_id || patient?.patient_id || '';
+    if (!resolvedPatientId) return setMessage('当前病例未关联患者，无法上传影像。');
+    if (!uploadFiles.length) return setMessage('请先选择一组 DICOM 文件。');
+    const traceId = uploadTraceId || caseItem?.trace_id || (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : 'trace-' + Date.now().toString(36));
+    setUploading(true);
+    setMessage('正在上传 DICOM 文件集合，请稍候。');
+    setUploadStage('正在上传 DICOM 文件集合');
     try {
-      const item = await createCaseImagingInput(caseId, {
-        patient_id: caseRecord?.patient_id || undefined,
-        trace_id: values.trace_id || caseRecord?.trace_id || null,
+      await uploadDicomSeriesFiles(caseId, {
+        patient_id: resolvedPatientId,
+        trace_id: traceId,
+        files: uploadFiles,
         modality: values.modality || 'CT',
-        source_type: values.source_type || 'demo',
-        storage_uri: values.storage_uri || '',
+        source_type: values.source_type || 'real_deidentified',
         deidentified: true,
         not_for_diagnosis: true,
-        provenance_json: provenanceJson,
-        quality_flags_json: qualityFlagsJson,
       });
-      setDetails((current) => ({ ...current, [item.input_asset_id]: item }));
-      setMessageType('success');
-      setMessage('影像输入元数据已登记：' + item.input_asset_id);
-      form.resetFields();
-      await loadPageState();
+      setUploadOpen(false);
+      uploadForm.resetFields();
+      setUploadFiles([]);
+      setMessage('已接收 ' + uploadFiles.length + ' 个 DICOM 文件，系统将进入受控预处理流程。');
+      await load();
     } catch (error) {
-      setMessageType('error');
-      setMessage('影像输入登记失败：' + (error instanceof Error ? error.message : '请稍后重试'));
+      setMessage(formatApiErrorMessage(error, 'DICOM 文件上传失败，请稍后重试。'));
     } finally {
-      setSaving(false);
+      setUploading(false);
     }
   }
 
-  async function handleDemoFill() {
-    form.setFieldsValue(demoValues);
-    setMessageType('info');
-    setMessage('已填入课程演示样例，仅用于元数据登记，不代表真实临床影像。');
-  }
-
-  async function handleDicomDemoFill() {
-    dicomForm.setFieldsValue(dicomDemoValues);
-    setMessageType('info');
-    setMessage('已填入 DICOM contract 演示样例，仅用于 metadata-only 登记，不会读取真实 DICOM。');
-  }
-
-  async function handleDicomSubmit(values: DicomSeriesFormValues) {
-    const provenanceJson = safeParseJson(values.provenance_json);
-    if (provenanceJson === null) {
-      setMessageType('error');
-      setMessage('provenance_json 不是合法 JSON，请先修正后再保存。');
-      return;
-    }
-
-    const qualityFlagsJson = safeParseJson(values.quality_flags_json);
-    if (qualityFlagsJson === null) {
-      setMessageType('error');
-      setMessage('quality_flags_json 不是合法 JSON，请先修正后再保存。');
-      return;
-    }
-
+  async function handleRegister(values: DicomFormValues) {
+    const payload: DicomSeriesRegisterPayload = {
+      series_label: values.series_label || 'DICOM 影像序列',
+      source_type: values.source_type || 'dicom_series',
+      dicom_series_ref: values.dicom_series_ref || values.storage_uri || '',
+      storage_uri: values.storage_uri || values.dicom_series_ref || '',
+      deidentified: true,
+      not_for_diagnosis: true,
+      provenance_json: { registered_from: 'doctor_workstation' },
+      quality_flags_json: { preprocessing_status: 'pending' },
+    };
+    if (!payload.dicom_series_ref) return setMessage('请填写 DICOM 引用或存储位置。');
     try {
-      setSaving(true);
-      const item = await registerDicomSeries(caseId, {
-        series_label: values.series_label || 'DICOM series',
-        source_type: values.source_type || 'demo',
-        dicom_series_ref: values.dicom_series_ref || values.storage_uri || '',
-        storage_uri: values.storage_uri || values.dicom_series_ref || '',
-        deidentified: true,
-        not_for_diagnosis: true,
-        provenance_json: provenanceJson,
-        quality_flags_json: qualityFlagsJson,
-      } as DicomSeriesRegisterPayload);
-      setDetails((current) => ({ ...current, [item.input_asset_id]: item }));
-      setMessageType('success');
-      setMessage('DICOM series 元数据已登记：' + item.input_asset_id + '。仅为 contract placeholder，不读取真实 DICOM。');
-      dicomForm.resetFields();
-      await loadPageState();
+      await registerDicomSeries(caseId, payload);
+      setRegisterOpen(false);
+      registerForm.resetFields();
+      await load();
+      setMessage('影像序列已登记，列表已刷新。');
     } catch (error) {
-      setMessageType('error');
-      setMessage('DICOM series 登记失败：' + (error instanceof Error ? error.message : '请稍后重试'));
+      setMessage(formatApiErrorMessage(error, '登记影像序列失败，请稍后重试。'));
+    }
+  }
+
+  async function handlePreprocess(inputAssetId: string) {
+    setBusyId(inputAssetId);
+    setMessage('正在请求预处理，请稍候。');
+    let nextMessage = '请求预处理已提交，正在刷新状态。';
+    try {
+      const result = (await requestImagingPreprocess(inputAssetId)) as ImagingPreprocessResponse;
+      const refreshed = await getImagingPreprocessingStatus(inputAssetId).catch(() => null);
+      const status = String(refreshed?.preprocessing_status || result.preprocessing_status || result.status || '').toLowerCase();
+      if (status === 'completed') {
+        nextMessage = '真实执行成功：预处理完成，可运行。';
+      } else if (status === 'failed') {
+        nextMessage = '真实执行失败，请查看详情原因。';
+      } else if (status === 'running' || status === 'processing') {
+        nextMessage = '真实执行中，请稍候。';
+      } else if (status === 'planned' || status === 'ready_for_preprocessing') {
+        nextMessage = '预处理计划已生成，等待真实执行。';
+      } else if (status === 'not_implemented') {
+        nextMessage = '预处理契约未实现。';
+      } else if (result.message) {
+        nextMessage = '预处理已受理，系统正在刷新状态。';
+      }
+      if (refreshed && refreshed.input_asset_id) {
+        setStatuses((current) => ({ ...current, [refreshed.input_asset_id]: refreshed }));
+        setItems((current) => current.map((item) => item.input_asset_id === refreshed.input_asset_id ? { ...item, storage_uri: refreshed.storage_uri || item.storage_uri, source_type: refreshed.source_type || item.source_type, deidentified: refreshed.deidentified ?? item.deidentified, not_for_diagnosis: refreshed.not_for_diagnosis ?? item.not_for_diagnosis } : item));
+      }
+    } catch (error) {
+      nextMessage = formatApiErrorMessage(error, '请求预处理失败，请稍后重试。');
     } finally {
-      setSaving(false);
+      await load();
+      setBusyId('');
+      setMessage(nextMessage);
     }
   }
 
-  async function handleExpand(expanded: boolean, record: CaseImagingInputItem) {
-    if (!expanded || details[record.input_asset_id]) return;
-    try {
-      const detail = await getCaseImagingInput(record.input_asset_id);
-      setDetails((current) => ({ ...current, [record.input_asset_id]: detail }));
-      void getImagingPreprocessingStatus(record.input_asset_id).then((status) => {
-        setPreprocessingStatusMap((current) => ({ ...current, [record.input_asset_id]: status }));
-      }).catch(() => undefined);
-    } catch {
-      setDetails((current) => ({ ...current, [record.input_asset_id]: record }));
-    }
-  }
-
-  async function handleRequestPreprocess(inputAssetId: string) {
-    setMessage('');
-    try {
-      const result = await requestImagingPreprocess(inputAssetId);
-      setPreprocessingStatusMap((current) => ({ ...current, [inputAssetId]: result }));
-      setMessageType(result.preprocessing_status === 'not_implemented' || result.error_code === 'preprocessing_not_implemented' ? 'warning' : 'success');
-      setMessage('预处理请求已提交：' + inputAssetId + '。当前仅返回 contract placeholder，不运行 dcm2niix / N4。');
-    } catch (error) {
-      setMessageType('error');
-      setMessage('请求预处理失败：' + (error instanceof Error ? error.message : '请稍后重试'));
-    }
-  }
-
-  const digitalTwinSummary = getTwinLabel(items.length, shadowRuns.length);
+  const uploadSummary = useMemo(() => {
+    if (!uploadFiles.length) return '尚未选择文件';
+    const names = uploadFiles.slice(0, 4).map((file) => file.name).join('、');
+    return '已选择 ' + uploadFiles.length + ' 个文件：' + names + (uploadFiles.length > 4 ? ' 等' : '');
+  }, [uploadFiles]);
 
   return (
-    <Space direction='vertical' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }} size={16}>
-      <Space direction='vertical' size={2}>
-        <Typography.Title level={4} style={{ margin: 0 }}>影像输入 / 数字孪生</Typography.Title>
-        <Typography.Text type='secondary'>病例：{caseId}</Typography.Text>
-      </Space>
+    <Space direction='vertical' size={16} style={{ width: '100%', maxWidth: '100%' }}>
+      <CaseSubNav caseId={caseId} patientName={patientName(patient)} patientId={patientId(patient, caseItem)} caseNo={caseItem?.case_no} />
+      {message ? <Alert type='warning' showIcon message={message} /> : null}
+      <Alert type='info' showIcon message='这里支持两种影像输入方式：上传同一患者的一组 DICOM 文件，或者登记影像序列引用。上传后会进入受控预处理流程，生成 image.nii.gz 后才能进入影像模型评估。' />
 
-      <Alert
-        type='info'
-        showIcon
-        message='这里只登记影像 metadata / reference，不上传真实文件'
-        description='deidentified 和 not_for_diagnosis 固定为 true。页面仅用于课程演示、shadow 旁路和数字孪生入口，不构成临床诊断，也不触发模型运行。'
-      />
-
-      {message ? (
-        <Alert
-          type={messageType}
-          showIcon
-          message={message}
+      <WorkspaceTableShell
+        title='影像输入 / 数字孪生'
+        subtitle='这里记录影像输入、预处理状态和病例级影像契约，不直接展示诊断结论。'
+        actions={<Space><Button type='primary' onClick={openUpload}>上传 DICOM 文件集合</Button><Button onClick={openRegister}>登记影像序列（引用）</Button><Button onClick={load}>刷新</Button></Space>}
+      >
+        <Table
+          rowKey='input_asset_id'
+          loading={loading}
+          dataSource={items}
+          pagination={false}
+          sticky
+          scroll={{ x: 1560, y: 'calc(100vh - 340px)' }}
+          columns={[
+            { title: '影像输入 ID', dataIndex: 'input_asset_id', width: 220, fixed: 'left' as const },
+            { title: '来源类型', dataIndex: 'source_type', width: 180, render: sourceLabel },
+            { title: '预处理状态', width: 180, render: (_: unknown, row: CaseImagingInputItem) => <Tag color={workflowStatusColor(workflowStatusLabel(row, statuses[row.input_asset_id]))}>{workflowStatusLabel(row, statuses[row.input_asset_id])}</Tag> },
+            { title: 'DICOM 影像引用', dataIndex: 'storage_uri', width: 360, ellipsis: true },
+            { title: '模型输入文件', width: 360, render: (_: unknown, row: CaseImagingInputItem) => statuses[row.input_asset_id]?.model_input_file || row.storage_uri || '-' },
+            { title: '脱敏', dataIndex: 'deidentified', width: 100, render: (value: boolean) => <Tag color={value ? 'green' : 'gold'}>{value ? '是' : '否'}</Tag> },
+            { title: '非诊断', dataIndex: 'not_for_diagnosis', width: 100, render: (value: boolean) => <Tag color={value ? 'green' : 'gold'}>{value ? '是' : '否'}</Tag> },
+            { title: '操作', width: 220, fixed: 'right' as const, render: (_: unknown, row: CaseImagingInputItem) => <Space><Button size='small' onClick={() => setDetail(row)}>查看</Button><Button size='small' loading={busyId === row.input_asset_id} onClick={() => handlePreprocess(row.input_asset_id)}>请求预处理</Button></Space> },
+          ]}
         />
-      ) : null}
+      </WorkspaceTableShell>
 
-      <Card
-        size='small'
-        title='病例上下文'
-        extra={<Space wrap size={8}><Link href='/cases'>返回病例列表</Link><Link href={'/cases/' + caseId + '/model-input'}>CAP/COP 特征与输入快照</Link><Link href={'/cases/' + caseId + '/shadow-audit'}>Shadow 审计</Link></Space>}
-        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
-      >
-        <Descriptions bordered size='small' column={2}>
-          <Descriptions.Item label='病例 ID'>{caseRecord?.case_id || caseId}</Descriptions.Item>
-          <Descriptions.Item label='病例编号'>{caseRecord?.case_no || '-'}</Descriptions.Item>
-          <Descriptions.Item label='患者 ID'>{caseRecord?.patient_id || '-'}</Descriptions.Item>
-          <Descriptions.Item label='Trace / 溯源'>{caseRecord?.trace_id || '-'}</Descriptions.Item>
-          <Descriptions.Item label='病种任务'>{caseRecord?.disease_task || '-'}</Descriptions.Item>
-          <Descriptions.Item label='当前状态'>{caseRecord?.status || '-'}</Descriptions.Item>
-        </Descriptions>
-      </Card>
-
-      <Card
-        size='small'
-        title='DICOM preprocessing contract'
-        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
-        extra={<Space wrap size={8}><Button onClick={handleDicomDemoFill}>填充 DICOM contract 样例</Button><Button type='primary' onClick={() => dicomForm.submit()}>登记 DICOM series</Button></Space>}
-      >
-        <Alert
-          type='warning'
-          showIcon
-          message='这里只登记 DICOM series metadata，不上传真实 DICOM'
-          description='DICOM 不能直接进入 CAP/COP 影像模型；必须先经过 dcm2niix -> raw_image.nii.gz，再经 N4BiasFieldCorrection -> image.nii.gz。label.nii.gz 仅作训练/评估标注引用，不进入推理。当前请求预处理只会返回 preprocessing_not_implemented。'
-        />
-        <Form form={dicomForm} layout='vertical' onFinish={handleDicomSubmit} initialValues={dicomDemoValues} style={{ marginTop: 12 }}>
-          <Row gutter={16}>
-            <Col xs={24} md={8}>
-              <Form.Item label='series_label' name='series_label' rules={[{ required: true, message: '请输入 series_label' }]}>
-                <Input placeholder='例如：CAP/COP DICOM series demo' />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item label='source_type' name='source_type' rules={[{ required: true, message: '请选择 source_type' }]}>
-                <Select options={[{ label: 'synthetic', value: 'synthetic' }, { label: 'demo', value: 'demo' }, { label: 'real_deidentified', value: 'real_deidentified' }]} />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item label='dicom_series_ref' name='dicom_series_ref' rules={[{ required: true, message: '请输入 dicom_series_ref' }]}>
-                <Input placeholder='例如：managed://coursework-demo/case-001/dicom-series-01' />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item label='storage_uri / 引用位置' name='storage_uri' rules={[{ required: true, message: '请输入 storage_uri' }]}>
-            <Input placeholder='例如：managed://coursework-demo/case-001/dicom-series-01' />
-          </Form.Item>
-          <Space wrap size={16} style={{ marginBottom: 16 }}>
-            <Checkbox checked disabled>deidentified = true</Checkbox>
-            <Checkbox checked disabled>not_for_diagnosis = true</Checkbox>
-          </Space>
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Form.Item label='provenance_json' name='provenance_json' extra='仅记录来源和引用，不读取真实 DICOM 文件。'>
-                <Input.TextArea rows={8} spellCheck={false} />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item label='quality_flags_json' name='quality_flags_json' extra='用于说明课程演示质量标记，不影响诊断。'>
-                <Input.TextArea rows={8} spellCheck={false} />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Space wrap size={8}>
-            <Button type='primary' htmlType='submit' loading={saving}>登记 DICOM series</Button>
-            <Typography.Text type='secondary'>保存后不会自动预处理，也不会运行 dcm2niix / N4。</Typography.Text>
-          </Space>
-        </Form>
-      </Card>
-
-      <Card
-        size='small'
-        title='登记影像元数据'
-        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
-        extra={<Button onClick={handleDemoFill}>填充课程演示样例</Button>}
-      >
-        <Form form={form} layout='vertical' onFinish={handleSubmit} initialValues={demoValues}>
-          <Row gutter={16}>
-            <Col xs={24} md={8}>
-              <Form.Item label='Trace / 溯源 ID' name='trace_id' rules={[{ required: true, message: '请输入 trace_id' }]}>
-                <Input placeholder='例如：trace-demo' />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item label='模态' name='modality' rules={[{ required: true, message: '请选择模态' }]}>
-                <Select
-                  options={[
-                    { label: 'CT', value: 'CT' },
-                    { label: 'NIfTI', value: 'NIfTI' },
-                    { label: '演示影像', value: 'demo_image' },
-                    { label: '合成影像样本', value: 'synthetic_visual_sample' },
-                  ]}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item label='来源类型' name='source_type' rules={[{ required: true, message: '请选择来源类型' }]}>
-                <Select
-                  options={[
-                    { label: '脱敏真实影像', value: 'real_deidentified' },
-                    { label: '合成样本', value: 'synthetic' },
-                    { label: '课程演示', value: 'demo' },
-                  ]}
-                />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Form.Item label='存储 URI / 参考位置' name='storage_uri' rules={[{ required: true, message: '请输入 storage_uri' }]}>
-            <Input placeholder='例如：managed://coursework-demo/case-001/ct-series-01' />
-          </Form.Item>
-
-          <Space wrap size={16} style={{ marginBottom: 16 }}>
-            <Checkbox checked disabled>deidentified = true</Checkbox>
-            <Checkbox checked disabled>not_for_diagnosis = true</Checkbox>
-          </Space>
-
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Form.Item
-                label='provenance_json'
-                name='provenance_json'
-                extra='仅填写来源与处理说明，不写真实影像文件路径。'
-              >
-                <Input.TextArea rows={8} spellCheck={false} />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item
-                label='quality_flags_json'
-                name='quality_flags_json'
-                extra='用于记录课程演示质量标记，不影响诊断。'
-              >
-                <Input.TextArea rows={8} spellCheck={false} />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Space wrap size={8}>
-            <Button type='primary' htmlType='submit' loading={saving}>登记影像输入元数据</Button>
-            <Typography.Text type='secondary'>保存后不会自动诊断，也不会生成 shadow recommendation。</Typography.Text>
-          </Space>
-        </Form>
-      </Card>
-
-      <Card
-        size='small'
-        title='影像输入列表'
-        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
-      >
-        <Space direction='vertical' size={8} style={{ width: '100%' }}>
-          <Typography.Text type='secondary'>
-            当前仅展示 metadata / reference summary。点击行左侧展开可看 provenance、quality flags 和 DICOM preprocessing contract。
-          </Typography.Text>
-          <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-            <Table
-              rowKey='input_asset_id'
-              loading={loading}
-              dataSource={items}
-              pagination={false}
-              scroll={{ x: 1380 }}
-              expandable={{
-                expandedRowRender: (record) => {
-                  const detail = details[record.input_asset_id] || record;
-                  return (
-                    <div style={{ margin: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden', padding: 12, border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa' }}>
-                      <Space direction='vertical' size={12} style={{ width: '100%' }}>
-                        <Descriptions bordered size='small' column={2}>
-                          <Descriptions.Item label='source_format'>{preprocessingStatusMap[record.input_asset_id]?.source_format || 'dicom_series'}</Descriptions.Item>
-                          <Descriptions.Item label='preprocessed_format'>{preprocessingStatusMap[record.input_asset_id]?.preprocessed_format || 'nifti_nii_gz'}</Descriptions.Item>
-                          <Descriptions.Item label='preprocessing_script'>{preprocessingStatusMap[record.input_asset_id]?.preprocessing_script || 'dcmtonii_N4.py'}</Descriptions.Item>
-                          <Descriptions.Item label='conversion_tool'>{preprocessingStatusMap[record.input_asset_id]?.conversion_tool || 'dcm2niix'}</Descriptions.Item>
-                          <Descriptions.Item label='bias_correction'>{preprocessingStatusMap[record.input_asset_id]?.bias_correction || 'N4BiasFieldCorrection'}</Descriptions.Item>
-                          <Descriptions.Item label='preprocessing_status'>{getPreprocessingStatusLabel(preprocessingStatusMap[record.input_asset_id]?.preprocessing_status || 'pending')}</Descriptions.Item>
-                          <Descriptions.Item label='raw_output_file'>{preprocessingStatusMap[record.input_asset_id]?.raw_output_file || 'raw_image.nii.gz'}</Descriptions.Item>
-                          <Descriptions.Item label='model_input_file'>{preprocessingStatusMap[record.input_asset_id]?.model_input_file || 'image.nii.gz'}</Descriptions.Item>
-                          <Descriptions.Item label='label_file'>{preprocessingStatusMap[record.input_asset_id]?.label_file || 'label.nii.gz'}</Descriptions.Item>
-                        </Descriptions>
-                        <Space wrap size={8}>
-                          <Button onClick={() => void handleRequestPreprocess(record.input_asset_id)}>请求预处理</Button>
-                          <Typography.Text type='secondary'>当前只是 contract placeholder，不会真的运行 dcm2niix 或 N4。</Typography.Text>
-                        </Space>
-                        <Row gutter={16}>
-                          <Col xs={24} md={12}>
-                            <Typography.Title level={5} style={{ marginTop: 0 }}>provenance_json</Typography.Title>
-                            {renderJsonBlock(detail.provenance_json)}
-                          </Col>
-                          <Col xs={24} md={12}>
-                            <Typography.Title level={5} style={{ marginTop: 0 }}>quality_flags_json</Typography.Title>
-                            {renderJsonBlock(detail.quality_flags_json)}
-                          </Col>
-                        </Row>
-                      </Space>
-                    </div>
-                  );
-                },
-                onExpand: handleExpand,
-              }}
-              locale={{
-                emptyText: (
-                  <Space direction='vertical' size={4}>
-                    <Typography.Text>暂无影像输入记录</Typography.Text>
-                    <Typography.Text type='secondary'>可以先填充课程演示样例，再登记一条 metadata/reference。</Typography.Text>
-                  </Space>
-                ),
-              }}
-              columns={[
-                { title: '输入资产 ID', dataIndex: 'input_asset_id', width: 220, render: (value: string) => value || '-' },
-                { title: '模态', dataIndex: 'modality', width: 120, render: (value: string) => <Tag>{getModalityLabel(value)}</Tag> },
-                { title: '来源类型', dataIndex: 'source_type', width: 150, render: (value: string) => <Tag>{getSourceTypeLabel(value)}</Tag> },
-                { title: '存储 URI', dataIndex: 'storage_uri', width: 280, render: (value: string) => <Typography.Text>{value || '-'}</Typography.Text> },
-                { title: '脱敏', dataIndex: 'deidentified', width: 90, render: (value: boolean) => <Tag color={value ? 'green' : 'red'}>{value ? 'true' : 'false'}</Tag> },
-                { title: '非诊断', dataIndex: 'not_for_diagnosis', width: 90, render: (value: boolean) => <Tag color={value ? 'green' : 'red'}>{value ? 'true' : 'false'}</Tag> },
-                { title: 'Trace / 溯源', dataIndex: 'trace_id', width: 220, render: (value: string) => value || '-' },
-                { title: '创建时间', dataIndex: 'created_at', width: 180, render: (value: string) => value || '-' },
-                { title: '预处理状态', dataIndex: 'input_asset_id', width: 140, render: (_: string, record: CaseImagingInputItem) => {
-                  const status = preprocessingStatusMap[record.input_asset_id]?.preprocessing_status;
-                  return <Tag color={status === 'completed' ? 'green' : status === 'failed' ? 'red' : status === 'not_implemented' ? 'orange' : 'blue'}>{getPreprocessingStatusLabel(status || 'pending')}</Tag>;
-                } },
-              ]}
-            />
+      <Modal title='上传 DICOM 文件集合' open={uploadOpen} onCancel={() => setUploadOpen(false)} onOk={() => uploadForm.submit()} okText='上传并登记' cancelText='取消' confirmLoading={uploading} destroyOnHidden>
+        <Form form={uploadForm} layout='vertical' onFinish={handleUpload} initialValues={{ modality: 'CT', source_type: 'real_deidentified' }}>
+          <div style={{ marginBottom: 12 }}>
+            <Typography.Text type='secondary'>系统溯源编号（自动生成）：{uploadTraceId || caseItem?.trace_id || '-'}</Typography.Text>
           </div>
-        </Space>
-      </Card>
+          <Form.Item label='模态' name='modality'><Select options={[{ value: 'CT', label: 'CT' }, { value: 'XRAY', label: 'X 线' }, { value: 'MRI', label: 'MRI' }, { value: 'US', label: '超声' }]} /></Form.Item>
+          <Form.Item label='来源类型' name='source_type'><Select options={[{ value: 'real_deidentified', label: '真实脱敏' }, { value: 'synthetic', label: '合成/演示' }, { value: 'demo', label: '演示数据' }]} /></Form.Item>
+          <Form.Item label='DICOM 文件集合' required>
+            <div style={{ border: '1px dashed #d9d9d9', borderRadius: 8, padding: 12, background: '#fafafa' }}>
+              <input type='file' multiple accept='.dcm,.dicom,.ima,application/dicom' onChange={(event) => setUploadFiles(Array.from(event.target.files || []))} style={{ width: '100%' }} />
+              <Typography.Text type='secondary' style={{ display: 'block', marginTop: 8 }}>请选择同一患者的一组 DICOM 序列文件。系统会接收并交由服务器做受控存储与预处理。</Typography.Text>
+              <Typography.Text style={{ display: 'block', marginTop: 8 }}>{uploadSummary}</Typography.Text>
+            <Typography.Text type='secondary' style={{ display: 'block', marginTop: 8 }}>{uploading ? uploadStage || '正在上传 DICOM 文件集合' : '上传后将自动登记影像序列，并等待预处理完成。'}</Typography.Text>
+            </div>
+          </Form.Item>
+          <Space wrap>
+            <Tag color='green'>脱敏后使用</Tag>
+            <Tag color='green'>非诊断用途</Tag>
+          </Space>
+        </Form>
+      </Modal>
 
-      <Card
-        size='small'
-        title='病例级数字孪生骨架'
-        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
-      >
-        <Alert
-          type='warning'
-          showIcon
-          message='课程演示 / shadow / 非诊断 / 非正式推荐'
-          description='这里仅展示病例级肺部状态 twin 的入口骨架，不上传真实影像，不触发模型，不写 recommendation，也不写 trace/evidence。'
-        />
-        <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-          <Col xs={24} md={6}>
-            <div style={{ height: '100%', border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
-              <Space direction='vertical' size={4}>
-                <Typography.Text type='secondary'>影像输入状态</Typography.Text>
-                <Tag color={items.length > 0 ? 'green' : 'default'}>{getImagingStateLabel(items.length)}</Tag>
-                <Typography.Text>{items.length > 0 ? '仅登记 metadata / reference。' : '尚未登记影像输入元数据。'}</Typography.Text>
-              </Space>
-            </div>
-          </Col>
-          <Col xs={24} md={6}>
-            <div style={{ height: '100%', border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
-              <Space direction='vertical' size={4}>
-                <Typography.Text type='secondary'>表格 baseline 状态</Typography.Text>
-                <Tag color={snapshots.length > 0 ? 'green' : 'default'}>{getBaselineLabel(snapshots.length)}</Tag>
-                <Typography.Text>{snapshots.length > 0 ? '表格 baseline 已有输入快照，可继续做课程联调。' : '请先补齐表格 baseline 输入快照。'}</Typography.Text>
-              </Space>
-            </div>
-          </Col>
-          <Col xs={24} md={6}>
-            <div style={{ height: '100%', border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
-              <Space direction='vertical' size={4}>
-                <Typography.Text type='secondary'>Shadow 状态</Typography.Text>
-                <Tag color={shadowRuns.length > 0 ? 'green' : 'default'}>{getShadowLabel(shadowRuns.length)}</Tag>
-                <Typography.Text>{shadowRuns.length > 0 ? '已有旁路审计记录，可在 Shadow 页面查看。' : '该页面不触发运行，只展示入口骨架。'}</Typography.Text>
-              </Space>
-            </div>
-          </Col>
-          <Col xs={24} md={6}>
-            <div style={{ height: '100%', border: '1px solid #f0f0f0', borderRadius: 8, padding: 16, background: '#fff' }}>
-              <Space direction='vertical' size={4}>
-                <Typography.Text type='secondary'>病例级肺部状态 twin</Typography.Text>
-                <Tag color={items.length > 0 && snapshots.length > 0 ? 'blue' : 'default'}>{digitalTwinSummary}</Tag>
-                <Typography.Text>Shadow only / not_for_diagnosis / not formal recommendation。</Typography.Text>
-              </Space>
-            </div>
-          </Col>
-        </Row>
-        <Typography.Paragraph type='secondary' style={{ marginTop: 12, marginBottom: 0 }}>
-          保存影像输入元数据后，系统不会自动诊断。若后续要接入可执行路径，需要先完成课程演示级输入快照，再由受控 shadow 路径写入旁路审计；当前页面只保留入口和状态骨架。
-        </Typography.Paragraph>
-      </Card>
+      <Modal title='登记影像序列（引用）' open={registerOpen} onCancel={() => setRegisterOpen(false)} onOk={() => registerForm.submit()} okText='保存' cancelText='取消' destroyOnHidden>
+        <Form form={registerForm} layout='vertical' onFinish={handleRegister} initialValues={{ source_type: 'dicom_series', series_label: 'DICOM 影像序列' }}>
+          <Form.Item label='序列名称' name='series_label'><Input /></Form.Item>
+          <Form.Item label='来源类型' name='source_type'><Select options={[{ value: 'dicom_series', label: '登记影像序列（DICOM）' }, { value: 'synthetic', label: '合成/演示影像' }, { value: 'demo', label: '演示数据' }]} /></Form.Item>
+          <Form.Item label='DICOM 引用' name='dicom_series_ref' rules={[{ required: true, message: '请填写 DICOM 引用' }]}><Input placeholder='managed://...' /></Form.Item>
+          <Form.Item label='存储位置' name='storage_uri'><Input placeholder='managed://...' /></Form.Item>
+          <Space wrap>
+            <Tag color='green'>脱敏后使用</Tag>
+            <Tag color='green'>非诊断用途</Tag>
+          </Space>
+        </Form>
+      </Modal>
+
+      <Drawer title='影像输入详情' width={560} open={!!detail} onClose={() => setDetail(null)}>
+        {detail ? (
+          <Descriptions column={1} size='small' bordered>
+            <Descriptions.Item label='影像输入 ID'>{detail.input_asset_id}</Descriptions.Item>
+            <Descriptions.Item label='系统溯源编号'>{detail.trace_id || '-'}</Descriptions.Item>
+            <Descriptions.Item label='来源类型'>{sourceLabel(detail.source_type)}</Descriptions.Item>
+            <Descriptions.Item label='DICOM / 存储引用'>{detail.storage_uri}</Descriptions.Item>
+            <Descriptions.Item label='预处理状态'>{workflowStatusLabel(detail, statuses[detail.input_asset_id])}</Descriptions.Item>
+            <Descriptions.Item label='上传状态'>{String((statuses[detail.input_asset_id]?.provenance_json as Record<string, unknown> | undefined)?.upload_state || (detail.provenance_json as Record<string, unknown> | undefined)?.upload_state || '-')}</Descriptions.Item>
+            <Descriptions.Item label='文件数量'>{String((statuses[detail.input_asset_id]?.provenance_json as Record<string, unknown> | undefined)?.upload_file_count || (detail.provenance_json as Record<string, unknown> | undefined)?.upload_file_count || '-')}</Descriptions.Item>
+            <Descriptions.Item label='文件摘要'>{uploadManifestSummary(statuses[detail.input_asset_id])}</Descriptions.Item>
+            <Descriptions.Item label='脱敏'>{detail.deidentified ? '是' : '否'}</Descriptions.Item>
+            <Descriptions.Item label='非诊断'>{detail.not_for_diagnosis ? '是' : '否'}</Descriptions.Item>
+            <Descriptions.Item label='转换工具'>{statuses[detail.input_asset_id]?.conversion_tool || '-'}</Descriptions.Item>
+            <Descriptions.Item label='原始输出文件'>{statuses[detail.input_asset_id]?.raw_output_file || '-'}</Descriptions.Item>
+            <Descriptions.Item label='偏置场校正'>{statuses[detail.input_asset_id]?.bias_correction || '-'}</Descriptions.Item>
+            <Descriptions.Item label='模型输入文件'>{statuses[detail.input_asset_id]?.model_input_file || '-'}</Descriptions.Item>
+            <Descriptions.Item label='提示信息'>{statuses[detail.input_asset_id]?.message || '-'}</Descriptions.Item>
+          </Descriptions>
+        ) : null}
+      </Drawer>
     </Space>
   );
 }

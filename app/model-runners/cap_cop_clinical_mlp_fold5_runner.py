@@ -16,7 +16,7 @@ os.environ.setdefault('MKL_NUM_THREADS', '1')
 
 MODEL_VERSION_ID = 'b12f315a-7f44-491d-bf46-b0da73f6da03'
 WEIGHT_PATH = Path('/srv/medorion/models/agents/cap_cop_classifier_agent/v1.0.0/clinical_mlp/weights/fold5_best.pth')
-PREPROCESS_ARTIFACT_PATH = Path('/srv/medorion/models/agents/cap_cop_classifier_agent/v1.0.0/preprocessing/clinical_tabular_standardization_v1.json')
+PREPROCESS_ARTIFACT_PATH = Path('/srv/medorion/models/agents/cap_cop_classifier_agent/v1.0.0/multimodal_resnet18_bigdata/preprocess_artifacts/clinical_tabular_standardization_v1.json')
 EXPECTED_WEIGHT_SHA256 = '0b66192745f6c35d5158596e89db7bd1a2d6292ed66a0de4ca3f28c49fa9426a'
 LABEL_MAPPING = {'CAP': 0, 'COP': 1}
 
@@ -97,28 +97,49 @@ def _coerce_numeric(value: Any) -> float:
         return float(sum(ord(ch) for ch in text) % 1000) / 1000.0
 
 
-def _materialize_features(feature_columns: list[str], mapped_features: Any) -> tuple[list[float], list[str]]:
+def _artifact_median_values(feature_columns: list[str], preprocess_payload: dict[str, Any]) -> dict[str, float]:
+    imputation = preprocess_payload.get('imputation')
+    if not isinstance(imputation, dict):
+        raise RuntimeError('invalid_runner_response: preprocess artifact missing imputation settings')
+    median_values = imputation.get('median_values')
+    if not isinstance(median_values, dict):
+        raise RuntimeError('invalid_runner_response: preprocess artifact missing median_values')
+    resolved: dict[str, float] = {}
+    for column in feature_columns:
+        raw_value = median_values.get(column)
+        try:
+            resolved[column] = float(raw_value)
+        except (TypeError, ValueError):
+            raise RuntimeError(f'invalid_runner_response: invalid median value for {column}') from None
+    return resolved
+
+
+def _materialize_features(feature_columns: list[str], mapped_features: Any, median_values: dict[str, float]) -> tuple[list[float], list[str], list[str]]:
     missing: list[str] = []
+    imputed: list[str] = []
     values: list[float] = []
     if isinstance(mapped_features, list):
         if len(mapped_features) != len(feature_columns):
             raise RuntimeError('input_insufficient')
         for index, raw_value in enumerate(mapped_features):
+            column = feature_columns[index]
             if raw_value is None:
-                missing.append(feature_columns[index])
-                values.append(0.0)
+                missing.append(column)
+                imputed.append(column)
+                values.append(float(median_values[column]))
             else:
                 values.append(_coerce_numeric(raw_value))
-        return values, missing
+        return values, missing, imputed
     if not isinstance(mapped_features, dict):
         raise RuntimeError('invalid_json: mapped_features must be a dict or list')
     for column in feature_columns:
         if column not in mapped_features or mapped_features[column] is None:
             missing.append(column)
-            values.append(0.0)
+            imputed.append(column)
+            values.append(float(median_values[column]))
             continue
         values.append(_coerce_numeric(mapped_features[column]))
-    return values, missing
+    return values, missing, imputed
 
 
 def _apply_standard_scaler(feature_columns: list[str], values: list[float], preprocess_payload: dict[str, Any]) -> tuple[list[float], bool]:
@@ -234,10 +255,9 @@ def main() -> int:
             return _error('not_for_diagnosis_required', 'not_for_diagnosis must be true', trace_id=trace_id, input_snapshot_id=input_snapshot_id)
 
         feature_columns, preprocess_payload = _load_preprocess_artifact()
+        median_values = _artifact_median_values(feature_columns, preprocess_payload)
         mapped_features = payload.get('mapped_features')
-        feature_values, missing_features = _materialize_features(feature_columns, mapped_features)
-        if missing_features:
-            return _error('input_insufficient', f'missing required features: {", ".join(missing_features)}', trace_id=trace_id, input_snapshot_id=input_snapshot_id)
+        feature_values, missing_features, imputed_features = _materialize_features(feature_columns, mapped_features, median_values)
 
         if not WEIGHT_PATH.exists():
             return _error('artifact_missing', f'weight file not found at {WEIGHT_PATH}', trace_id=trace_id, input_snapshot_id=input_snapshot_id)
@@ -296,7 +316,11 @@ def main() -> int:
             'candidate_label': candidate_label,
             'confidence': {'max_probability': round(confidence, 6)},
             'uncertainty': {'one_minus_max_probability': round(uncertainty, 6)},
-            'limitations': ['not_for_diagnosis', 'shadow_only', 'not_formal_recommendation', 'not_externally_validated', 'internal_retrospective_evaluation_only', 'probability_uncalibrated', 'extreme_probability_not_clinical_certainty', 'requires_doctor_review', 'requires_quality_review_before_clinical_use'] + (['preprocess_artifact_not_applied'] if not preprocess_applied else []),
+            'missing_features': missing_features,
+            'imputed_features': imputed_features,
+            'imputation_strategy': 'median_per_feature_after_numeric_coercion',
+            'imputation_source': str(PREPROCESS_ARTIFACT_PATH),
+            'limitations': ['not_for_diagnosis', 'shadow_only', 'not_formal_recommendation', 'not_externally_validated', 'internal_retrospective_evaluation_only', 'probability_uncalibrated', 'extreme_probability_not_clinical_certainty', 'requires_doctor_review', 'requires_quality_review_before_clinical_use'] + (['preprocess_artifact_not_applied'] if not preprocess_applied else []) + (['training_time_missing_value_imputation'] if missing_features else []),
             'runtime': {
                 'python_path': sys.executable,
                 'torch_version': getattr(torch, '__version__', 'unknown'),

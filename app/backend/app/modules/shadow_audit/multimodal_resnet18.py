@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from uuid import UUID, NAMESPACE_URL, uuid5
+from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -36,7 +36,7 @@ MULTIMODAL_SHADOW_MODEL_VERSION_LABEL = "cap_cop_classifier_agent_v1.0.0_multimo
 MULTIMODAL_SHADOW_MODEL_FAMILY = "multimodal_resnet18"
 MULTIMODAL_SCHEMA_ID = "clinical_mlp_cap_cop_input_schema_v1"
 MULTIMODAL_FEATURE_SET_ID = "cap_cop_clinical_feature_set_v1"
-MULTIMODAL_ALLOWED_SOURCE_TYPES = {"synthetic"}
+MULTIMODAL_ALLOWED_SOURCE_TYPES = {"synthetic", "demo", "real_deidentified"}
 MULTIMODAL_WEIGHT_HASH = "f17a4ed6f1f2f4b5e5c0d793a536b4b6e73d154ad2f5578fd844ae041967c809"
 MULTIMODAL_RUNNER_FEATURE_COLUMNS_PATH = Path(
     "/srv/medorion/models/agents/cap_cop_classifier_agent/v1.0.0/"
@@ -361,6 +361,7 @@ def _write_shadow_audit(
     clinical_feature_values: dict[str, Any] | list[Any],
     clinical_feature_translation_summary: dict[str, Any] | None = None,
     real_inference: bool,
+    execution_id: str | None = None,
 ) -> MultimodalResNet18OneShotResult:
     started_at = datetime.now(UTC)
     completed_at = started_at
@@ -401,7 +402,7 @@ def _write_shadow_audit(
         error_code=error_code,
         error_detail_json=error_detail,
         output=output,
-        idempotency_key=f"multimodal-one-shot:{input_row.input_asset_id}:{snapshot.input_snapshot_id}:{trace_id}:{dry_run_label or 'default'}",
+        idempotency_key=f"multimodal-one-shot:{input_row.input_asset_id}:{snapshot.input_snapshot_id}:{trace_id}:{dry_run_label or 'default'}:{execution_id}",
     )
     result = create_shadow_audit_record(db, payload)
     limitations = []
@@ -450,7 +451,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
     if not input_row.deidentified or not input_row.not_for_diagnosis:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "imaging_input_not_eligible", "message": "Imaging input must be deidentified and not_for_diagnosis"})
     if _normalize_source_type(input_row.source_type) not in MULTIMODAL_ALLOWED_SOURCE_TYPES:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_source_type", "message": "Only synthetic imaging inputs are allowed for this coursework bridge"})
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "unsupported_source_type", "message": "Only synthetic, demo, or real_deidentified imaging inputs are allowed for this coursework bridge"})
     imaging_contract = require_preprocessed_imaging_reference(input_row, allow_synthetic_only=True)
 
     snapshot = _require_snapshot(db, payload.input_snapshot_id)
@@ -465,6 +466,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
     trace_id = (payload.trace_id.strip() if payload.trace_id else snapshot.trace_id.strip() if snapshot.trace_id else input_row.trace_id.strip())
     if not trace_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_trace_id", "message": "trace_id is required"})
+    execution_id = str(getattr(payload, 'execution_id', '') or '').strip() or uuid4().hex
 
     model, version = _model_version_row(db, snapshot.model_version_id)
     if version.id != MULTIMODAL_SHADOW_MODEL_VERSION_ID:
@@ -497,6 +499,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             prototype_state="prototype_not_executed",
             clinical_feature_values=[],
             real_inference=False,
+            execution_id=execution_id,
         )
     schema_item = build_model_input_schema_for_version(model, version)
     if schema_item.model_input_schema_id != MULTIMODAL_SCHEMA_ID or schema_item.disease_task_feature_set_id != MULTIMODAL_FEATURE_SET_ID or len(schema_item.feature_requirements) != 36:
@@ -531,6 +534,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             prototype_state="prototype_not_executed",
             clinical_feature_values=[],
             real_inference=False,
+            execution_id=execution_id,
         )
 
     clinical_feature_values, clinical_feature_translation_summary = _clinical_feature_values(snapshot)
@@ -564,6 +568,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             clinical_feature_values=clinical_feature_values,
             clinical_feature_translation_summary=clinical_feature_translation_summary,
             real_inference=False,
+            execution_id=execution_id,
         )
 
     if not payload.enable_real_shadow:
@@ -596,6 +601,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             clinical_feature_values=clinical_feature_values,
             clinical_feature_translation_summary=clinical_feature_translation_summary,
             real_inference=False,
+            execution_id=execution_id,
         )
 
     artifact_probe = invoke_multimodal_runner(check_artifact=True)
@@ -630,6 +636,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             clinical_feature_values=clinical_feature_values,
             clinical_feature_translation_summary=clinical_feature_translation_summary,
             real_inference=False,
+            execution_id=execution_id,
         )
 
     artifact_preflight = artifact_probe.payload or {}
@@ -666,6 +673,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             clinical_feature_values=clinical_feature_values,
             clinical_feature_translation_summary=clinical_feature_translation_summary,
             real_inference=False,
+            execution_id=execution_id,
         )
 
     runner_request = {
@@ -735,6 +743,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             clinical_feature_values=clinical_feature_values,
             clinical_feature_translation_summary=clinical_feature_translation_summary,
             real_inference=False,
+            execution_id=execution_id,
         )
 
     runner_payload = runner_result.payload
@@ -780,6 +789,7 @@ def run_controlled_multimodal_resnet18_one_shot_shadow(
             clinical_feature_values=clinical_feature_values,
             clinical_feature_translation_summary=clinical_feature_translation_summary,
             real_inference=False,
+            execution_id=execution_id,
         )
 
     probabilities = runner_payload.get("probabilities") if isinstance(runner_payload.get("probabilities"), dict) else {}

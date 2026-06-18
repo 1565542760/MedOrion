@@ -33,7 +33,7 @@ CLINICAL_PREPROCESS_ARTIFACT_PATH = Path(
 LABEL_MAPPING = {"CAP": 0, "COP": 1}
 EXPECTED_MODALITY_SCOPE = "ct_image+clinical_table"
 EXPECTED_SHAPE = (96, 96, 96)
-EXPECTED_SOURCE_TYPE = "synthetic"
+EXPECTED_SOURCE_TYPES = {"synthetic", "demo", "real_deidentified"}
 SOURCE_FORMAT_DICOM_SERIES = "dicom_series"
 PREPROCESSED_FORMAT_NIFTI_NII_GZ = "nifti_nii_gz"
 PREPROCESSING_SCRIPT_NAME = "dcmtonii_N4.py"
@@ -287,8 +287,8 @@ def _prepare_image(
     F_module: Any,
 ) -> tuple[Any, dict[str, Any]]:
     source_type = str(payload.get("source_type") or "").strip().lower()
-    if source_type != EXPECTED_SOURCE_TYPE:
-        raise RuntimeError("unsupported_source_type: expected synthetic")
+    if source_type not in EXPECTED_SOURCE_TYPES:
+        raise RuntimeError("unsupported_source_type: expected synthetic, demo, or real_deidentified")
 
     source_format = _normalize_contract_text(payload.get("source_format"))
     preprocessed_format = _normalize_contract_text(payload.get("preprocessed_format"))
@@ -414,6 +414,7 @@ def _artifact_check(path: Path) -> dict[str, Any]:
 
 
 def _real_forward(payload: dict[str, Any]) -> dict[str, Any]:
+    source_type = str(payload.get("source_type") or "").strip().lower()
     torch_module, nn_module, F_module, nib_module, np_module, monai_module, torchvision_module = _load_torch_stack()
     torch_module.set_num_threads(1)
     try:
@@ -467,7 +468,7 @@ def _real_forward(payload: dict[str, Any]) -> dict[str, Any]:
         "case_id": str(payload.get("case_id")),
         "patient_id": payload.get("patient_id"),
         "input_asset_id": payload.get("input_asset_id"),
-        "source_type": EXPECTED_SOURCE_TYPE,
+        "source_type": source_type,
         "model_name": MODEL_NAME,
         "adapter_code": ADAPTER_CODE,
         "model_version_id": model_version_id,

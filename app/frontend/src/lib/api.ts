@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosRequestConfig } from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 
 type ApiMode = 'mock' | 'backend';
@@ -49,6 +49,127 @@ export type LoginResponse = {
   refresh_token: string;
   token_type?: string;
   expires_in?: number;
+};
+
+export type CaseItem = {
+  case_id: string;
+  patient_id: string;
+  case_no?: string | null;
+  disease_task?: string | null;
+  status?: string | null;
+  trace_id?: string | null;
+  chief_complaint?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type PatientCreatePayload = {
+  external_patient_id?: string | null;
+  display_name?: string | null;
+  name?: string | null;
+  sex?: string | null;
+  birth_date?: string | null;
+  consent_status?: string | null;
+};
+
+export type CaseCreatePayload = {
+  patient_id: string;
+  case_no?: string | null;
+  disease_task?: string | null;
+  status?: string | null;
+  chief_complaint?: string | null;
+};
+
+export type CaseImagingInputCreatePayload = {
+  patient_id?: string | null;
+  trace_id?: string | null;
+  modality?: string | null;
+  source_type?: string | null;
+  storage_uri?: string | null;
+  deidentified?: boolean | null;
+  not_for_diagnosis?: boolean | null;
+  provenance_json?: Record<string, unknown> | null;
+  quality_flags_json?: Record<string, unknown> | null;
+};
+
+export type PatientItem = {
+  patient_id: string;
+  external_patient_id?: string | null;
+  display_name?: string | null;
+  sex?: string | null;
+  birth_date?: string | null;
+  consent_status?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CaseImagingInputItem = {
+  input_asset_id: string;
+  case_id?: string | null;
+  patient_id?: string | null;
+  trace_id?: string | null;
+  modality?: string | null;
+  source_type?: string | null;
+  storage_uri?: string | null;
+  deidentified?: boolean | null;
+  not_for_diagnosis?: boolean | null;
+  provenance_json?: Record<string, unknown> | null;
+  quality_flags_json?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type DicomSeriesRegisterResponse = CaseImagingInputItem & {
+  status?: string | null;
+  route?: string | null;
+  source_format?: string | null;
+  preprocessed_format?: string | null;
+  preprocessing_status?: string | null;
+  preprocessing_error_code?: string | null;
+  preprocessing_error_message?: string | null;
+  preprocessing_script?: string | null;
+  conversion_tool?: string | null;
+  bias_correction?: string | null;
+  raw_output_file?: string | null;
+  model_input_file?: string | null;
+  label_file?: string | null;
+  message?: string | null;
+};
+
+export type ImagingPreprocessingStatusResponse = DicomSeriesRegisterResponse;
+
+export type ImagingPreprocessResponse = ImagingPreprocessingStatusResponse & {
+  error_code?: string | null;
+};
+
+export type CaseImagingInputListResponse = {
+  status?: string | null;
+  route?: string | null;
+  total: number;
+  limit: number;
+  offset: number;
+  items: CaseImagingInputItem[];
+};
+
+export type DicomSeriesRegisterPayload = {
+  series_label: string;
+  source_type: string;
+  dicom_series_ref: string;
+  storage_uri?: string;
+  deidentified?: boolean;
+  not_for_diagnosis?: boolean;
+  provenance_json?: Record<string, unknown>;
+  quality_flags_json?: Record<string, unknown>;
+};
+
+export type DicomSeriesUploadPayload = {
+  patient_id: string;
+  trace_id: string;
+  files: File[];
+  modality?: string;
+  source_type?: string;
+  deidentified?: boolean;
+  not_for_diagnosis?: boolean;
 };
 
 export function saveCurrentUser(user: CurrentUser) {
@@ -187,6 +308,37 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
+function isAuthRoute(url?: string | null) {
+  return !!url && (url.includes('/api/v1/auth/login') || url.includes('/api/v1/auth/refresh') || url.includes('/api/v1/auth/logout'));
+}
+
+client.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const status = error?.response?.status;
+    const config = error?.config as (AxiosRequestConfig & { _retry?: boolean }) | undefined;
+    if (status === 401 && config && !config._retry && !isAuthRoute(config.url)) {
+      config._retry = true;
+      try {
+        await refreshToken();
+        const token = getAccessToken();
+        if (token) {
+          const headers = config.headers as { set?: (name: string, value: string) => void } & Record<string, string>;
+          if (headers && typeof headers.set === 'function') {
+            headers.set('Authorization', 'Bearer ' + token);
+          } else {
+            config.headers = { ...(config.headers || {}), Authorization: 'Bearer ' + token } as AxiosRequestConfig['headers'];
+          }
+        }
+        return client.request(config);
+      } catch {
+        clearAuthTokens();
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
 function withTraceId(traceId?: string) {
   if (!traceId) return {};
   return { headers: { 'x-trace-id': traceId } };
@@ -205,6 +357,60 @@ function unwrapItem<T>(data: unknown): T {
     return (data as { item: T }).item;
   }
   return data as T;
+}
+
+function describeApiErrorDetail(detail: unknown): string | null {
+  if (!detail) return null;
+  if (typeof detail === 'string') {
+    const trimmed = detail.trim();
+    return trimmed || null;
+  }
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const entry = item as { loc?: unknown[]; msg?: string; code?: string };
+        const loc = Array.isArray(entry.loc) ? entry.loc.map((value) => String(value)).join('.') : '';
+        const msg = entry.msg || entry.code || '';
+        if (!loc && !msg) return null;
+        return loc ? loc + ': ' + msg : msg;
+      })
+      .filter((value): value is string => !!value);
+    return parts.length ? parts.join('；') : null;
+  }
+  if (typeof detail === 'object') {
+    const entry = detail as { message?: string; code?: string; detail?: unknown };
+    if (typeof entry.message === 'string' && entry.message.trim()) return entry.message.trim();
+    if (typeof entry.code === 'string' && entry.code.trim()) return entry.code.trim();
+    if ('detail' in entry) return describeApiErrorDetail(entry.detail);
+  }
+  return null;
+}
+
+export function extractErrorMessage(detail: string, fallback: string) {
+  if (!detail) return fallback;
+  try {
+    const parsed = JSON.parse(detail) as { detail?: unknown; message?: string };
+    return describeApiErrorDetail(parsed.detail) || parsed?.message || fallback;
+  } catch {
+    return detail || fallback;
+  }
+}
+
+export function formatApiErrorMessage(error: unknown, fallback: string) {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    if (status === 401) return '认证已过期，请重新登录后继续操作。';
+    if (status === 403) return '当前账号无权执行此操作。';
+    const detail = error.response?.data;
+    if (typeof detail === 'string') return extractErrorMessage(detail, fallback);
+    return describeApiErrorDetail(detail) || fallback;
+  }
+  if (error instanceof Error) {
+    if (error.message.includes('401')) return '认证已过期，请重新登录后继续操作。';
+    if (error.message.trim()) return error.message;
+  }
+  return fallback;
 }
 
 export type InferenceTaskPayload = {
@@ -634,6 +840,63 @@ export async function registerDicomSeries(caseId: string, payload: DicomSeriesRe
   return unwrapItem<DicomSeriesRegisterResponse>(data);
 }
 
+export async function uploadDicomSeriesFiles(caseId: string, payload: DicomSeriesUploadPayload): Promise<ImagingPreprocessingStatusResponse> {
+  if (API_MODE === 'mock') {
+    const manifest = payload.files.map((file) => ({ filename: file.name, size_bytes: file.size, content_type: file.type || null }));
+    return {
+      status: 'ok',
+      route: '/api/v1/cases/' + caseId + '/imaging-inputs/dicom-series/upload',
+      input_asset_id: 'img-demo-upload-' + Math.random().toString(36).slice(2),
+      case_id: caseId,
+      patient_id: payload.patient_id,
+      trace_id: payload.trace_id,
+      modality: payload.modality || 'CT',
+      source_type: payload.source_type || 'real_deidentified',
+      storage_uri: 'managed://coursework-upload/' + caseId + '/' + Date.now(),
+      deidentified: payload.deidentified ?? true,
+      not_for_diagnosis: payload.not_for_diagnosis ?? true,
+      source_format: 'dicom_series',
+      preprocessed_format: 'nifti_nii_gz',
+      preprocessing_script: 'dcmtonii_N4.py',
+      conversion_tool: 'dcm2niix',
+      bias_correction: 'N4BiasFieldCorrection',
+      raw_output_file: 'raw_image.nii.gz',
+      model_input_file: 'image.nii.gz',
+      label_file: 'label.nii.gz',
+      preprocessing_status: 'pending',
+      provenance_json: { upload_state: 'uploaded_to_controlled_storage', upload_file_count: payload.files.length, upload_manifest: manifest },
+      quality_flags_json: { upload_state: 'uploaded_to_controlled_storage', upload_file_count: payload.files.length, upload_manifest: manifest },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+  const formData = new FormData();
+  payload.files.forEach((file) => formData.append('files', file, file.name));
+  formData.append('patient_id', payload.patient_id);
+  formData.append('trace_id', payload.trace_id);
+  formData.append('modality', payload.modality || 'CT');
+  formData.append('source_type', payload.source_type || 'real_deidentified');
+  formData.append('deidentified', String(payload.deidentified ?? true));
+  formData.append('not_for_diagnosis', String(payload.not_for_diagnosis ?? true));
+  const accessToken = getAccessToken();
+  const response = await fetch(API_BASE_URL + '/api/v1/cases/' + caseId + '/imaging-inputs/dicom-series/upload', {
+    method: 'POST',
+    headers: {
+      'x-request-id': uuidv4(),
+      ...(payload.trace_id ? { 'x-trace-id': payload.trace_id } : {}),
+      ...(accessToken ? { Authorization: 'Bearer ' + accessToken } : {}),
+    },
+    body: formData,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(extractErrorMessage(detail, 'DICOM 文件上传失败，请稍后重试。'));
+  }
+  const bodyText = await response.text();
+  const data = bodyText ? JSON.parse(bodyText) : null;
+  return unwrapItem<ImagingPreprocessingStatusResponse>(data);
+}
+
 export async function getImagingPreprocessingStatus(inputAssetId: string): Promise<ImagingPreprocessingStatusResponse> {
   if (API_MODE === 'mock') {
     return {
@@ -649,12 +912,86 @@ export async function getImagingPreprocessingStatus(inputAssetId: string): Promi
       model_input_file: 'image.nii.gz',
       label_file: 'label.nii.gz',
       preprocessing_status: 'not_implemented',
+      provenance_json: {},
+      quality_flags_json: {},
       message: 'preprocessing_not_implemented',
     };
   }
   const data = (await client.get('/api/v1/imaging-inputs/' + inputAssetId + '/preprocessing-status')).data;
-  return data as ImagingPreprocessingStatusResponse;
+  return unwrapItem<ImagingPreprocessingStatusResponse>(data);
 }
+
+
+export type CapCopShadowWorkflowBranchReadiness = {
+  status: string;
+  can_run: boolean;
+  disabled_reasons: string[];
+  required_inputs: string[];
+  detected_inputs: string[];
+  next_action?: string | null;
+};
+
+export type CapCopShadowWorkflowBranchPlan = CapCopShadowWorkflowBranchReadiness & {
+  branch?: string | null;
+  planned_status?: string | null;
+  skipped_reason?: string | null;
+  limitations?: unknown;
+  shadow_run_id?: string | null;
+  output_id?: string | null;
+  candidate_label?: string | null;
+  prediction_probability_json?: Record<string, unknown> | null;
+  confidence_json?: Record<string, unknown> | null;
+  uncertainty_json?: Record<string, unknown> | null;
+  note?: string | null;
+};
+
+export type CapCopShadowWorkflowReadinessResponse = {
+  status?: string | null;
+  route?: string | null;
+  overall_status?: string | null;
+  branches: {
+    clinical_mlp: CapCopShadowWorkflowBranchReadiness;
+    imaging_resnet18: CapCopShadowWorkflowBranchReadiness;
+    multimodal_resnet18: CapCopShadowWorkflowBranchReadiness;
+  };
+};
+
+export type CapCopShadowWorkflowResponse = {
+  status?: string | null;
+  route?: string | null;
+  mode?: string | null;
+  overall_status?: string | null;
+  execution_plan?: {
+    overall_status?: string | null;
+    branches: {
+      clinical_mlp: CapCopShadowWorkflowBranchPlan;
+      imaging_resnet18: CapCopShadowWorkflowBranchPlan;
+      multimodal_resnet18: CapCopShadowWorkflowBranchPlan;
+    };
+    limitations?: string[];
+  };
+  branches: {
+    clinical_mlp: CapCopShadowWorkflowBranchPlan;
+    imaging_resnet18: CapCopShadowWorkflowBranchPlan;
+    multimodal_resnet18: CapCopShadowWorkflowBranchPlan;
+  };
+  plan?: {
+    overall_status?: string | null;
+    branches: {
+      clinical_mlp: CapCopShadowWorkflowBranchPlan;
+      imaging_resnet18: CapCopShadowWorkflowBranchPlan;
+      multimodal_resnet18: CapCopShadowWorkflowBranchPlan;
+    };
+    limitations?: string[];
+  };
+  result?: {
+    branches: {
+      clinical_mlp: CapCopShadowWorkflowBranchPlan;
+      imaging_resnet18: CapCopShadowWorkflowBranchPlan;
+      multimodal_resnet18: CapCopShadowWorkflowBranchPlan;
+    };
+  };
+};
 
 export async function requestImagingPreprocess(inputAssetId: string): Promise<ImagingPreprocessResponse> {
   if (API_MODE === 'mock') {
@@ -671,186 +1008,26 @@ export async function requestImagingPreprocess(inputAssetId: string): Promise<Im
       model_input_file: 'image.nii.gz',
       label_file: 'label.nii.gz',
       preprocessing_status: 'not_implemented',
+      provenance_json: {},
+      quality_flags_json: {},
       message: 'preprocessing_not_implemented',
       error_code: 'preprocessing_not_implemented',
     };
   }
-  const data = (await client.post('/api/v1/imaging-inputs/' + inputAssetId + '/preprocess')).data;
-  return data as ImagingPreprocessResponse;
+
+  const response = await client.post(
+    '/api/v1/imaging-inputs/' + inputAssetId + '/preprocess',
+    {
+      dry_run: true,
+      execute: false,
+      execution_mode: 'plan_only',
+      allow_real_preprocessing: false,
+    },
+    { timeout: 0 },
+  );
+
+  return response.data as ImagingPreprocessResponse;
 }
-
-
-export type PatientItem = {
-  patient_id: string;
-  external_patient_id?: string | null;
-  display_name?: string | null;
-  sex?: string | null;
-  birth_date?: string | null;
-  consent_status?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-export type PatientCreatePayload = {
-  external_patient_id?: string | null;
-  display_name?: string | null;
-  name?: string | null;
-  sex?: string | null;
-  birth_date?: string | null;
-  consent_status?: string;
-};
-
-export type CaseItem = {
-  case_id: string;
-  case_no?: string | null;
-  patient_id: string;
-  disease_task?: string | null;
-  status?: string | null;
-  trace_id?: string | null;
-  chief_complaint?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-export type CaseCreatePayload = {
-  patient_id: string;
-  case_no?: string | null;
-  disease_task?: string | null;
-  status?: string | null;
-  chief_complaint?: string | null;
-};
-
-export type CaseImagingInputCreatePayload = {
-  patient_id?: string | null;
-  trace_id?: string | null;
-  modality: string;
-  source_type: string;
-  storage_uri: string;
-  deidentified?: boolean;
-  not_for_diagnosis?: boolean;
-  provenance_json?: Record<string, unknown> | null;
-  quality_flags_json?: Record<string, unknown> | null;
-};
-
-export type CaseImagingInputItem = {
-  input_asset_id: string;
-  case_id: string;
-  patient_id?: string | null;
-  trace_id?: string | null;
-  modality: string;
-  source_type: string;
-  storage_uri: string;
-  deidentified: boolean;
-  not_for_diagnosis: boolean;
-  provenance_json?: Record<string, unknown> | null;
-  quality_flags_json?: Record<string, unknown> | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-export type CaseImagingInputListResponse = {
-  status?: string;
-  route?: string;
-  total: number;
-  limit: number;
-  offset: number;
-  items: CaseImagingInputItem[];
-};
-
-export type DicomSeriesRegisterPayload = {
-  series_label: string;
-  source_type: string;
-  dicom_series_ref: string;
-  storage_uri?: string | null;
-  deidentified?: boolean;
-  not_for_diagnosis?: boolean;
-  provenance_json?: Record<string, unknown> | null;
-  quality_flags_json?: Record<string, unknown> | null;
-};
-
-export type DicomSeriesRegisterResponse = CaseImagingInputItem & {
-  source_format?: string | null;
-  preprocessed_format?: string | null;
-  preprocessing_status?: string | null;
-};
-
-export type ImagingPreprocessingStatusResponse = {
-  status?: string;
-  route?: string;
-  input_asset_id: string;
-  source_format?: string | null;
-  preprocessed_format?: string | null;
-  preprocessing_script?: string | null;
-  conversion_tool?: string | null;
-  bias_correction?: string | null;
-  raw_output_file?: string | null;
-  model_input_file?: string | null;
-  label_file?: string | null;
-  preprocessing_status?: string | null;
-  message?: string | null;
-};
-
-export type ImagingPreprocessResponse = ImagingPreprocessingStatusResponse & {
-  error_code?: string | null;
-};
-
-export type CapCopShadowWorkflowBranchReadiness = {
-  status?: string | null;
-  can_run?: boolean;
-  disabled_reasons?: string[];
-  required_inputs?: string[];
-  detected_inputs?: string[];
-  next_action?: string | null;
-};
-
-export type CapCopShadowWorkflowReadinessResponse = {
-  status?: string | null;
-  route?: string | null;
-  overall_status?: 'ready_all' | 'ready_partial' | 'blocked' | string | null;
-  branches: {
-    clinical_mlp?: CapCopShadowWorkflowBranchReadiness | null;
-    imaging_resnet18?: CapCopShadowWorkflowBranchReadiness | null;
-    multimodal_resnet18?: CapCopShadowWorkflowBranchReadiness | null;
-  };
-};
-
-export type CapCopShadowWorkflowBranchPlan = CapCopShadowWorkflowBranchReadiness & {
-  branch?: 'clinical_mlp' | 'imaging_resnet18' | 'multimodal_resnet18' | string;
-  status?: string | null;
-  planned_status?: string | null;
-  limitations?: unknown;
-  skipped_reason?: string | null;
-  shadow_run_id?: string | null;
-  output_id?: string | null;
-  candidate_label?: string | null;
-  prediction_probability_json?: Record<string, unknown> | null;
-  confidence_json?: unknown;
-  uncertainty_json?: unknown;
-  note?: string | null;
-};
-
-export type CapCopShadowWorkflowResponse = {
-  status?: string | null;
-  route?: string | null;
-  mode?: 'preview' | 'execute' | string | null;
-  overall_status?: string | null;
-  execution_plan?: {
-    overall_status?: string | null;
-    branches?: Record<string, CapCopShadowWorkflowBranchPlan> | CapCopShadowWorkflowBranchPlan[];
-    limitations?: unknown;
-  } | null;
-  branches?: Record<string, CapCopShadowWorkflowBranchPlan> | CapCopShadowWorkflowBranchPlan[];
-  plan?: {
-    overall_status?: string | null;
-    branches?: Record<string, CapCopShadowWorkflowBranchPlan> | CapCopShadowWorkflowBranchPlan[];
-    limitations?: unknown;
-  } | null;
-  result?: {
-    branches?: Record<string, CapCopShadowWorkflowBranchPlan> | CapCopShadowWorkflowBranchPlan[];
-  } | null;
-  message?: string | null;
-  error_code?: string | null;
-};
 
 export async function getCapCopShadowWorkflowReadiness(caseId: string): Promise<CapCopShadowWorkflowReadinessResponse> {
   if (API_MODE === 'mock') {
@@ -967,8 +1144,22 @@ export async function previewCapCopShadowWorkflow(caseId: string, payload: Recor
     const readiness = await getCapCopShadowWorkflowReadiness(caseId);
     return buildWorkflowPlanResponse(caseId, readiness, 'preview');
   }
-  const data = (await client.post('/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow', { ...payload, mode: 'preview' })).data;
-  return data as CapCopShadowWorkflowResponse;
+  const accessToken = getAccessToken();
+  const response = await fetch(API_BASE_URL + '/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-request-id': uuidv4(),
+      ...(accessToken ? { Authorization: 'Bearer ' + accessToken } : {})
+    },
+    body: JSON.stringify({ ...payload, mode: 'preview' }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(detail || 'preview_cap_cop_shadow_workflow_failed');
+  }
+  const bodyText = await response.text();
+  return JSON.parse(bodyText) as CapCopShadowWorkflowResponse;
 }
 
 export async function executeCapCopShadowWorkflow(caseId: string, payload: Record<string, unknown>): Promise<CapCopShadowWorkflowResponse> {
@@ -976,8 +1167,22 @@ export async function executeCapCopShadowWorkflow(caseId: string, payload: Recor
     const readiness = await getCapCopShadowWorkflowReadiness(caseId);
     return buildWorkflowPlanResponse(caseId, readiness, 'execute');
   }
-  const data = (await client.post('/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow', { ...payload, mode: 'execute' })).data;
-  return data as CapCopShadowWorkflowResponse;
+  const accessToken = getAccessToken();
+  const response = await fetch(API_BASE_URL + '/api/v1/cases/' + caseId + '/cap-cop-shadow/workflow', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-request-id': uuidv4(),
+      ...(accessToken ? { Authorization: 'Bearer ' + accessToken } : {})
+    },
+    body: JSON.stringify({ ...payload, mode: 'execute' }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(detail || 'execute_cap_cop_shadow_workflow_failed');
+  }
+  const bodyText = await response.text();
+  return JSON.parse(bodyText) as CapCopShadowWorkflowResponse;
 }
 
 export async function listMissingValueQueries(caseId: string, traceId?: string): Promise<MissingValueListResponse> {

@@ -1,7 +1,8 @@
-'use client';
+﻿'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Form, Input, Select, Space, Table, Tag, Typography } from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Button, Card, Drawer, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { WorkspaceTableShell } from '@/components/WorkspaceTableShell';
 import {
   approveModelVersion,
   createModel,
@@ -16,7 +17,17 @@ import {
   type ModelVersionItem,
 } from '@/lib/api';
 
-type ModelRow = ModelRegistryItem & { key: string };
+type ModelRow = ModelRegistryItem & {
+  key: string;
+  version_count: number;
+  latest_version: string;
+  latest_state: string;
+  display_model_title: string;
+  display_task_label: string;
+  display_modality_label: string;
+  is_seed_row?: boolean;
+};
+
 type VersionRow = ModelVersionItem & { key: string };
 
 type ModelFormValues = {
@@ -43,9 +54,7 @@ type RollbackFormValues = {
   target_version_id?: string;
 };
 
-const T = (value: string) => value;
-
-function parseJson<T>(raw?: string): T | undefined {
+function parseJson<T>(raw?: string) {
   if (!raw) return undefined;
   try {
     return JSON.parse(raw) as T;
@@ -57,13 +66,13 @@ function parseJson<T>(raw?: string): T | undefined {
 function normalizeError(error: unknown) {
   const response = (error as { response?: { status?: number; data?: { detail?: { code?: string } | string; code?: string } } })?.response;
   const code = response?.data?.detail && typeof response.data.detail === 'object' ? response.data.detail.code : response?.data?.code;
-  if (code === 'model_not_found') return T('\u64cd\u4f5c\u5931\u8d25\uff1a\u6a21\u578b\u4e0d\u5b58\u5728');
-  if (code === 'model_version_not_found') return T('\u64cd\u4f5c\u5931\u8d25\uff1a\u6a21\u578b\u7248\u672c\u4e0d\u5b58\u5728');
-  if (code === 'invalid_lifecycle_state') return T('\u64cd\u4f5c\u5931\u8d25\uff1a\u751f\u547d\u5468\u671f\u72b6\u6001\u65e0\u6548');
-  if (response?.status === 422) return T('\u64cd\u4f5c\u5931\u8d25\uff1a\u6a21\u578b\u5143\u6570\u636e\u6821\u9a8c\u672a\u901a\u8fc7');
-  if (response?.status === 409) return T('\u64cd\u4f5c\u5931\u8d25\uff1a\u57fa\u7840\u8d44\u6599\u51b2\u7a81\u6216 default \u552f\u4e00\u6027\u88ab\u62d2\u7edd');
-  if (response?.status === 404) return T('\u64cd\u4f5c\u5931\u8d25\uff1a\u540e\u7aef\u6a21\u578b\u7ba1\u7406\u63a5\u53e3\u4e0d\u53ef\u7528\uff08404\uff09');
-  return T('\u64cd\u4f5c\u5931\u8d25\uff1a\u8bf7\u7a0d\u540e\u91cd\u8bd5');
+  if (code === 'model_not_found') return '操作失败：模型不存在';
+  if (code === 'model_version_not_found') return '操作失败：模型版本不存在';
+  if (code === 'invalid_lifecycle_state') return '操作失败：生命周期状态无效';
+  if (response?.status === 422) return '操作失败：模型元数据校验未通过';
+  if (response?.status === 409) return '操作失败：基础资料冲突或 default 唯一性被拒绝';
+  if (response?.status === 404) return '操作失败：后端模型管理接口不可用（404）';
+  return '操作失败：请稍后重试';
 }
 
 function makeModelKey(item: ModelRegistryItem) {
@@ -89,28 +98,127 @@ function renderCellText(value: unknown) {
   return JSON.stringify(value);
 }
 
-function renderJsonBlock(value: unknown) {
-  return <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(value || {}, null, 2)}</pre>;
+const FORMAL_MODEL_ORDER = [
+  'clinical_mlp_cap_cop_classifier',
+  'imaging_resnet18_cap_cop_classifier',
+  'multimodal_resnet18_cap_cop_classifier',
+] as const;
+
+const FORMAL_MODEL_INFO: Record<string, { title: string; hint: string }> = {
+  clinical_mlp_cap_cop_classifier: { title: 'CAP/COP 临床模型', hint: '临床表格' },
+  imaging_resnet18_cap_cop_classifier: { title: 'CAP/COP 影像模型', hint: '预处理 CT 影像' },
+  multimodal_resnet18_cap_cop_classifier: { title: 'CAP/COP 多模态模型', hint: '临床表格 + 预处理 CT 影像' },
+};
+
+const TASK_LABELS: Record<string, string> = {
+  risk_assessment: '风险评估',
+};
+
+const MODALITY_LABELS: Record<string, string> = {
+  clinical_table: '临床表格',
+  ct_nifti: '预处理 CT 影像',
+  ct: '预处理 CT 影像',
+};
+
+function isFormalModel(model: ModelRegistryItem) {
+  const key = model.model_name || '';
+  return FORMAL_MODEL_ORDER.includes(key as (typeof FORMAL_MODEL_ORDER)[number]);
+}
+
+function formalModelInfo(model: ModelRegistryItem) {
+  const key = model.model_name || '';
+  return FORMAL_MODEL_INFO[key] || { title: 'CAP/COP 模型', hint: '正式模型' };
+}
+
+function taskLabel(taskType?: string | null) {
+  if (!taskType) return '-';
+  return TASK_LABELS[taskType] || '风险评估';
+}
+
+function modalityLabel(value?: string[] | string | null) {
+  const items = Array.isArray(value) ? value : (value ? [value] : []);
+  if (items.length === 0) return '-';
+  return items.map((item) => MODALITY_LABELS[item] || item).join(' + ');
+}
+
+function versionStateLabel(state?: string) {
+  switch ((state || '').toLowerCase()) {
+    case 'default': return '默认版本';
+    case 'canary': return '金丝雀版本';
+    case 'shadow': return '影子版本';
+    case 'approved': return '已批准';
+    case 'offline_evaluated': return '离线评估通过';
+    case 'deprecated': return '已弃用';
+    case 'archived': return '已归档';
+    case 'draft': return '草稿';
+    default: return renderCellText(state);
+  }
+}
+
+function sortVersions(versions?: ModelVersionItem[] | null) {
+  return [...(versions || [])].sort((a, b) => new Date(b.published_at || b.created_at || 0).getTime() - new Date(a.published_at || a.created_at || 0).getTime());
+}
+
+
+
+function buildFormalModelSeedRows(): ModelRow[] {
+  return FORMAL_MODEL_ORDER.map((model_name) => {
+    const meta = FORMAL_MODEL_INFO[model_name];
+    const modality_scope = model_name === 'clinical_mlp_cap_cop_classifier'
+      ? ['clinical_table']
+      : model_name === 'imaging_resnet18_cap_cop_classifier'
+        ? ['ct_nifti']
+        : ['clinical_table', 'ct_nifti'];
+    return {
+      model_id: model_name,
+      model_name,
+      disease_agent: 'capcop_agent',
+      task_type: 'risk_assessment',
+      modality_scope,
+      owner_team: '-',
+      description: '',
+      is_active: true,
+      created_at: '',
+      updated_at: '',
+      versions: [],
+      key: model_name,
+      version_count: 0,
+      latest_version: '-',
+      latest_state: '-',
+      display_model_title: meta.title,
+      display_task_label: taskLabel('risk_assessment'),
+      display_modality_label: meta.hint,
+      is_seed_row: true,
+    } as ModelRow;
+  });
 }
 
 export default function Page() {
   const [modelForm] = Form.useForm<ModelFormValues>();
   const [versionForm] = Form.useForm<VersionFormValues>();
   const [rollbackForm] = Form.useForm<RollbackFormValues>();
-  const [models, setModels] = useState<ModelRow[]>([]);
+
+  const [models, setModels] = useState<ModelRow[]>(() => buildFormalModelSeedRows());
   const [selectedModelId, setSelectedModelId] = useState('');
   const [selectedModel, setSelectedModel] = useState<ModelRegistryItem | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState('');
   const [evaluations, setEvaluations] = useState<ModelVersionEvaluationsResponse['item'] | null>(null);
-  const [loadingModels, setLoadingModels] = useState(true);
+
+  const [loadingModels, setLoadingModels] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [busyAction, setBusyAction] = useState('');
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'info' | 'warning' | 'error'>('info');
 
-  const versionRows = useMemo<VersionRow[]>(() => (selectedModel?.versions || []).map((item) => ({ ...item, key: makeVersionKey(item) })), [selectedModel]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [createModelOpen, setCreateModelOpen] = useState(false);
+  const [createVersionOpen, setCreateVersionOpen] = useState(false);
+  const [rollbackOpen, setRollbackOpen] = useState(false);
+  const initialLoadDoneRef = useRef(false);
 
-  async function loadModel(modelId: string, preferredVersionId?: string) {
+  const versionRows = useMemo<VersionRow[]>(() => sortVersions(selectedModel?.versions).map((item) => ({ ...item, key: makeVersionKey(item) })), [selectedModel]);
+
+  const loadModel = useCallback(async (modelId: string, openDrawer = false, preferredVersionId?: string) => {
     setLoadingDetail(true);
     try {
       const data = await getModel(modelId);
@@ -125,9 +233,10 @@ export default function Page() {
         setEvaluations(null);
       }
       rollbackForm.setFieldsValue({ version_id: nextVersionId || undefined, target_version_id: undefined });
+      if (openDrawer) setDrawerOpen(true);
     } catch (error) {
       setMessageType('error');
-      setMessage(T('\u52a0\u8f7d\u6a21\u578b\u8be6\u60c5\u5931\u8d25\uff1a') + (error instanceof Error ? error.message : T('\u8bf7\u7a0d\u540e\u91cd\u8bd5')));
+      setMessage('加载模型详情失败：' + (error instanceof Error ? error.message : '请稍后重试'));
       setSelectedModel(null);
       setSelectedModelId('');
       setSelectedVersionId('');
@@ -135,37 +244,50 @@ export default function Page() {
     } finally {
       setLoadingDetail(false);
     }
-  }
+  }, [rollbackForm]);
 
-  async function refreshModels(preferredModelId?: string) {
+  const refreshModels = useCallback(async (preferredModelId?: string) => {
     setLoadingModels(true);
     try {
       const data = await listModels();
-      const nextModels = (data.items || []).map((item) => ({ ...item, key: makeModelKey(item) }));
+      const nextModels = (data.items || [])
+        .filter((item) => isFormalModel(item))
+        .sort((a, b) => FORMAL_MODEL_ORDER.indexOf((a.model_name || '') as (typeof FORMAL_MODEL_ORDER)[number]) - FORMAL_MODEL_ORDER.indexOf((b.model_name || '') as (typeof FORMAL_MODEL_ORDER)[number]))
+        .map((item) => {
+          const versions = sortVersions(item.versions);
+          const meta = formalModelInfo(item);
+          return {
+            ...item,
+            versions,
+            key: makeModelKey(item),
+            version_count: versions.length,
+            latest_version: versions[0]?.version_label || '-',
+            latest_state: versions[0]?.approval_state || '-',
+            display_model_title: meta.title,
+            display_task_label: taskLabel(item.task_type),
+            display_modality_label: modalityLabel(item.modality_scope),
+            is_seed_row: false,
+          };
+        });
       setModels(nextModels);
       const nextSelectedId = preferredModelId || selectedModelId || nextModels[0]?.model_id || '';
       if (nextSelectedId) {
         const nextPreferredVersionId = nextSelectedId === selectedModelId ? selectedVersionId : '';
-        await loadModel(nextSelectedId, nextPreferredVersionId);
-      } else {
-        setSelectedModel(null);
-        setSelectedModelId('');
-        setSelectedVersionId('');
-        setEvaluations(null);
+        await loadModel(nextSelectedId, false, nextPreferredVersionId);
       }
     } catch (error) {
       setMessageType('error');
-      setMessage(T('\u52a0\u8f7d\u6a21\u578b\u5217\u8868\u5931\u8d25\uff1a') + (error instanceof Error ? error.message : T('\u8bf7\u7a0d\u540e\u91cd\u8bd5')));
+      setMessage('加载模型列表失败：' + (error instanceof Error ? error.message : '请稍后重试'));
     } finally {
       setLoadingModels(false);
     }
-  }
+  }, [loadModel, selectedModelId, selectedVersionId]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (initialLoadDoneRef.current) return;
+    initialLoadDoneRef.current = true;
     void refreshModels();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshModels]);
 
   async function handleCreateModel(values: ModelFormValues) {
     setBusyAction('create-model');
@@ -180,8 +302,9 @@ export default function Page() {
         description: values.description || '',
       });
       setMessageType('info');
-      setMessage(T('\u6a21\u578b\u5143\u6570\u636e\u5df2\u521b\u5efa\uff0c\u672a\u52a0\u8f7d\u771f\u5b9e\u6a21\u578b\u3001\u672a\u89e6\u53d1\u8bad\u7ec3\u3001\u672a\u8bfb\u53d6 .pth\u3002'));
+      setMessage('模型元数据已创建，未加载真实模型、未触发训练、未读取 .pth。');
       modelForm.resetFields();
+      setCreateModelOpen(false);
       await refreshModels(created.model_id);
     } catch (error) {
       setMessageType('error');
@@ -194,7 +317,7 @@ export default function Page() {
   async function handleCreateVersion(values: VersionFormValues) {
     if (!selectedModelId) {
       setMessageType('warning');
-      setMessage(T('\u8bf7\u5148\u9009\u62e9\u4e00\u4e2a\u6a21\u578b'));
+      setMessage('请先选择一个模型');
       return;
     }
     setBusyAction('create-version');
@@ -210,8 +333,9 @@ export default function Page() {
         output_schema: parseJson<Record<string, unknown>>(values.output_schema_json),
       });
       setMessageType('info');
-      setMessage(T('\u6a21\u578b\u7248\u672c\u5df2\u521b\u5efa\uff0cartifact_ref \u4ec5\u4f5c\u4e3a\u5143\u6570\u636e\u5b57\u7b26\u4e32\u4f7f\u7528\u3002'));
+      setMessage('模型版本已创建，artifact_ref 仅作元数据字符串使用。');
       versionForm.resetFields();
+      setCreateVersionOpen(false);
       await refreshModels(selectedModelId);
     } catch (error) {
       setMessageType('error');
@@ -227,7 +351,7 @@ export default function Page() {
     try {
       await approveModelVersion(versionId);
       setMessageType('info');
-      setMessage(T('\u7248\u672c\u5df2\u6279\u51c6\u3002'));
+      setMessage('版本已批准。');
       await refreshModels(selectedModelId);
     } catch (error) {
       setMessageType('error');
@@ -243,7 +367,7 @@ export default function Page() {
     try {
       await promoteModelVersion(versionId, targetState);
       setMessageType('info');
-      setMessage(T('\u7248\u672c\u72b6\u6001\u5df2\u66f4\u65b0\u4e3a\uff1a') + targetState);
+      setMessage('版本状态已更新为：' + targetState);
       await refreshModels(selectedModelId);
     } catch (error) {
       setMessageType('error');
@@ -256,7 +380,7 @@ export default function Page() {
   async function handleRollback(values: RollbackFormValues) {
     if (!values.version_id || !values.target_version_id) {
       setMessageType('warning');
-      setMessage(T('\u8bf7\u5148\u586b\u5199 version_id \u548c target_version_id'));
+      setMessage('请先填写 version_id 和 target_version_id');
       return;
     }
     setBusyAction('rollback');
@@ -264,7 +388,8 @@ export default function Page() {
     try {
       await rollbackModelVersion(values.version_id, values.target_version_id);
       setMessageType('info');
-      setMessage(T('\u7248\u672c\u56de\u6eda\u5df2\u63d0\u4ea4\u3002'));
+      setMessage('版本回滚已提交。');
+      setRollbackOpen(false);
       await refreshModels(selectedModelId);
     } catch (error) {
       setMessageType('error');
@@ -283,7 +408,7 @@ export default function Page() {
       setEvaluations(evalData.item);
       rollbackForm.setFieldsValue({ version_id: versionId });
       setMessageType('info');
-      setMessage(T('\u5df2\u52a0\u8f7d\u7248\u672c\u8bc4\u4f30\u6458\u8981\u3002'));
+      setMessage('已加载版本评估摘要。');
     } catch (error) {
       setMessageType('error');
       setMessage(normalizeError(error));
@@ -292,162 +417,156 @@ export default function Page() {
     }
   }
 
-  const modelDetailNotice = T('\u5f53\u524d\u53ea\u7ba1\u7406\u6a21\u578b\u5143\u6570\u636e\uff0c\u4e0d\u52a0\u8f7d\u771f\u5b9e\u6a21\u578b\uff0c\u4e0d\u89e6\u53d1\u8bad\u7ec3\uff0c\u4e0d\u8bfb\u53d6 .pth\uff1bshadow/canary/default \u53ea\u662f\u751f\u547d\u5468\u671f skeleton\uff0c\u4e0d\u662f\u771f\u5b9e\u6d41\u91cf\u8c03\u5ea6\u3002');
+  const notice = '当前页面仅展示 3 条正式 CAP/COP 模型。主表只看中文名称、任务和模态；英文 model_name、model_id、disease_agent 只在详情抽屉里显示。';
 
   return (
-    <Space direction='vertical' size={16} style={{ width: '100%' }}>
-      <Typography.Title level={4} style={{ margin: 0 }}>{T('\u6a21\u578b\u7ba1\u7406\u4e0e\u7248\u672c\u7ba1\u7406')}</Typography.Title>
-      <Alert type='info' showIcon message={modelDetailNotice} />
-      {message ? <Alert type={messageType} showIcon message={message} /> : null}
+    <main style={{ padding: 24, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+      <WorkspaceTableShell
+        title='CAP/COP 模型管理'
+        subtitle='主表只展示 3 条正式 CAP/COP 模型，任务和模态已中文化。英文标识留在详情抽屉。'
+        actions={(
+          <Space wrap>
+            <Button onClick={() => { modelForm.resetFields(); setCreateModelOpen(true); }}>新建模型</Button>
+            <Button onClick={() => { versionForm.resetFields(); setCreateVersionOpen(true); }} disabled={!selectedModelId}>新建版本</Button>
+            <Button onClick={() => void refreshModels(selectedModelId)}>刷新</Button>
+          </Space>
+        )}
+        minHeight={560}
+      >
+        <Space direction='vertical' size={12} style={{ width: '100%' }}>
+          <Alert type='info' showIcon message={notice} />
+          {message ? <Alert type={messageType} showIcon message={message} /> : null}
+          <Table
+            rowKey='model_id'
+            loading={loadingModels}
+            dataSource={models}
+            pagination={false}
+            size='small'
+            sticky
+            scroll={{ x: 1180, y: 'calc(100vh - 360px)' }}
+            onRow={(record) => ({ onClick: record.is_seed_row ? undefined : () => void loadModel(record.model_id, true) })}
+            rowClassName={(record) => (record.model_id === selectedModelId ? 'ant-table-row-selected' : '')}
+            columns={[
+              { title: '正式模型', dataIndex: 'display_model_title', width: 220, render: (_value: unknown, row: ModelRow) => (<Space direction='vertical' size={0}><Typography.Text strong>{row.display_model_title}</Typography.Text><Typography.Text type='secondary' style={{ fontSize: 12 }}>{row.display_task_label}</Typography.Text></Space>) },
+              { title: '病种任务', dataIndex: 'display_task_label', width: 150, render: (value: unknown) => renderCellText(value) },
+              { title: '模态范围', dataIndex: 'display_modality_label', width: 220, render: (value: unknown) => renderCellText(value) },
+              { title: '版本数', dataIndex: 'version_count', width: 90 },
+              { title: '状态', dataIndex: 'is_active', width: 120, render: (value: boolean) => <Tag color={value ? 'green' : 'default'}>{value ? '启用' : '停用'}</Tag> },
+              { title: '最近版本', dataIndex: 'latest_version', width: 150, render: (value: unknown) => renderCellText(value) },
+              { title: '最近状态', dataIndex: 'latest_state', width: 130, render: (value: string) => <Tag color={versionStateColor(value)}>{versionStateLabel(value)}</Tag> },
+              {
+                title: '操作',
+                width: 120,
+                render: (_: unknown, row: ModelRow) => (
+                  <Button size='small' onClick={(event) => { event.stopPropagation(); void loadModel(row.model_id, true); }}>查看</Button>
+                ),
+              },
+            ]}
+          />
+        </Space>
+      </WorkspaceTableShell>
 
-      <Card title={T('\u521b\u5efa\u6a21\u578b\u5143\u6570\u636e')}>
+      <Drawer
+        title={selectedModel ? '模型详情：' + formalModelInfo(selectedModel).title : '模型详情'}
+        width={960}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+      >
+        {selectedModel ? (
+          <Space direction='vertical' size={16} style={{ width: '100%' }}>
+            <Alert type='info' showIcon message={notice} />
+            <Alert type='info' showIcon message='英文 model_name、model_id、disease_agent 仅在技术信息区展示。' />
+            <Space wrap>
+              <Tag color='blue'>正式名称：{formalModelInfo(selectedModel).title}</Tag>
+              <Tag color='green'>模态：{modalityLabel(selectedModel.modality_scope as string[] | string | null)}</Tag>
+              <Tag color='cyan'>负责人：{renderCellText(selectedModel.owner_team)}</Tag>
+              <Tag color={selectedModel.is_active ? 'green' : 'default'}>{selectedModel.is_active ? '启用中' : '已停用'}</Tag>
+            </Space>
+            <Typography.Text type='secondary'>{renderCellText(selectedModel.description)}</Typography.Text>
+
+            <Card size='small' title='技术信息' style={{ width: '100%' }}>
+              <Space direction='vertical' size={4}>
+                <Typography.Text>英文 model_name：{renderCellText(selectedModel.model_name)}</Typography.Text>
+                <Typography.Text>模型 ID：{renderCellText(selectedModel.model_id)}</Typography.Text>
+                <Typography.Text>疾病代理：{renderCellText(selectedModel.disease_agent)}</Typography.Text>
+                <Typography.Text>任务类型：{renderCellText(selectedModel.task_type)}</Typography.Text>
+                <Typography.Text>模态原始值：{renderCellText(selectedModel.modality_scope)}</Typography.Text>
+              </Space>
+            </Card>
+
+            <Space wrap>
+              <Button onClick={() => { versionForm.resetFields(); setCreateVersionOpen(true); }} disabled={!selectedModelId}>新建版本</Button>
+              <Button onClick={() => { rollbackForm.resetFields(); setRollbackOpen(true); }} disabled={!selectedVersionId}>回滚</Button>
+            </Space>
+
+            <Table
+              rowKey='version_id'
+              loading={loadingDetail}
+              dataSource={versionRows}
+              pagination={false}
+              size='small'
+              sticky
+              scroll={{ x: 1180, y: 280 }}
+              columns={[
+                { title: '版本', dataIndex: 'version_label', width: 150, render: (value: unknown, row: VersionRow) => (<Space direction='vertical' size={0}><Typography.Text strong>{renderCellText(value)}</Typography.Text><Typography.Text type='secondary' style={{ fontSize: 12 }}>{row.version_id}</Typography.Text></Space>) },
+                { title: '状态', dataIndex: 'approval_state', width: 130, render: (value: string) => <Tag color={versionStateColor(value)}>{versionStateLabel(value)}</Tag> },
+                { title: '工件引用', dataIndex: 'artifact_ref', width: 280, render: (value: unknown) => renderCellText(value) },
+                { title: '发布时间', dataIndex: 'published_at', width: 180, render: (value: unknown) => renderCellText(value) },
+                {
+                  title: '操作',
+                  width: 360,
+                  render: (_: unknown, row: VersionRow) => (
+                    <Space wrap>
+                      <Button size='small' onClick={() => void handleInspectVersion(row.version_id)} loading={busyAction === 'inspect-' + row.version_id}>查看评估</Button>
+                      <Button size='small' onClick={() => void handleApprove(row.version_id)} loading={busyAction === 'approve-' + row.version_id}>批准</Button>
+                      <Button size='small' onClick={() => void handlePromote(row.version_id, 'shadow')} loading={busyAction === 'promote-' + row.version_id + '-shadow'}>转 shadow</Button>
+                      <Button size='small' onClick={() => void handlePromote(row.version_id, 'default')} loading={busyAction === 'promote-' + row.version_id + '-default'}>转 default</Button>
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+
+            <Typography.Title level={5} style={{ margin: 0 }}>版本评估摘要</Typography.Title>
+            <Typography.Text type='secondary'>当前版本：{selectedVersionId || '-'}</Typography.Text>
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', background: '#fafafa', padding: 12, borderRadius: 8 }}>{JSON.stringify(evaluations || {}, null, 2)}</pre>
+          </Space>
+        ) : (
+          <Typography.Text>请先从主表选择一个模型。</Typography.Text>
+        )}
+      </Drawer>
+
+      <Modal title='新建模型' open={createModelOpen} onCancel={() => setCreateModelOpen(false)} onOk={() => void modelForm.submit()} confirmLoading={busyAction === 'create-model'} okText='创建'>
         <Form layout='vertical' form={modelForm} onFinish={handleCreateModel}>
-          <Space size={16} wrap align='start' style={{ width: '100%' }}>
-            <Form.Item label='model_name' name='model_name' rules={[{ required: true, message: T('\u8bf7\u8f93\u5165 model_name') }]} style={{ minWidth: 220 }}>
-              <Input placeholder={T('\u4f8b\u5982\uff1ademo-capcop-model')} />
-            </Form.Item>
-            <Form.Item label='disease_agent' name='disease_agent' rules={[{ required: true, message: T('\u8bf7\u8f93\u5165 disease_agent') }]} style={{ minWidth: 220 }}>
-              <Input placeholder={T('\u4f8b\u5982\uff1acapcop_agent')} />
-            </Form.Item>
-            <Form.Item label='task_type' name='task_type' rules={[{ required: true, message: T('\u8bf7\u8f93\u5165 task_type') }]} style={{ minWidth: 220 }}>
-              <Input placeholder={T('\u4f8b\u5982\uff1arisk_assessment')} />
-            </Form.Item>
-            <Form.Item label='modality_scope' name='modality_scope' rules={[{ required: true, message: T('\u8bf7\u9009\u62e9 modality_scope') }]} style={{ minWidth: 240 }}>
-              <Select
-                mode='multiple'
-                options={[
-                  { label: 'ct', value: 'ct' },
-                  { label: 'labs', value: 'labs' },
-                  { label: 'clinical_table', value: 'clinical_table' },
-                  { label: 'notes', value: 'notes' },
-                  { label: 'ecg', value: 'ecg' },
-                ]}
-                placeholder={T('\u9009\u62e9\u9002\u7528\u6a21\u6001')}
-              />
-            </Form.Item>
-            <Form.Item label='owner_team' name='owner_team' rules={[{ required: true, message: T('\u8bf7\u8f93\u5165 owner_team') }]} style={{ minWidth: 220 }}>
-              <Input placeholder={T('\u4f8b\u5982\uff1adiagnostics')} />
-            </Form.Item>
-            <Form.Item label='description' name='description' style={{ minWidth: 360 }}>
-              <Input.TextArea rows={3} placeholder={T('\u5143\u6570\u636e\u63cf\u8ff0\uff0c\u4ec5\u7528\u4e8e\u9875\u9762\u5c55\u793a')} />
-            </Form.Item>
-          </Space>
-          <Button type='primary' htmlType='submit' loading={busyAction === 'create-model'}>{T('\u521b\u5efa demo model')}</Button>
+          <Form.Item label='model_name' name='model_name' rules={[{ required: true, message: '请输入 model_name' }]}><Input placeholder='例如：demo-capcop-model' /></Form.Item>
+          <Form.Item label='disease_agent' name='disease_agent' rules={[{ required: true, message: '请输入 disease_agent' }]}><Input placeholder='例如：capcop_agent' /></Form.Item>
+          <Form.Item label='task_type' name='task_type' rules={[{ required: true, message: '请输入 task_type' }]}><Input placeholder='例如：risk_assessment' /></Form.Item>
+          <Form.Item label='modality_scope' name='modality_scope' rules={[{ required: true, message: '请选择 modality_scope' }]}>
+            <Select mode='multiple' options={[{ label: 'ct', value: 'ct' }, { label: 'labs', value: 'labs' }, { label: 'clinical_table', value: 'clinical_table' }, { label: 'notes', value: 'notes' }, { label: 'ecg', value: 'ecg' }]} placeholder='选择适用模态' />
+          </Form.Item>
+          <Form.Item label='owner_team' name='owner_team' rules={[{ required: true, message: '请输入 owner_team' }]}><Input placeholder='例如：diagnostics' /></Form.Item>
+          <Form.Item label='description' name='description'><Input.TextArea rows={3} placeholder='仅用于页面展示的元数据说明' /></Form.Item>
         </Form>
-      </Card>
+      </Modal>
 
-      <Card title={T('\u6a21\u578b\u5217\u8868')}>
-        <Table
-          rowKey='model_id'
-          loading={loadingModels}
-          dataSource={models}
-          pagination={false}
-          scroll={{ x: 1400 }}
-          onRow={(record) => ({ onClick: () => void loadModel(record.model_id) })}
-          rowClassName={(record) => (record.model_id === selectedModelId ? 'ant-table-row-selected' : '')}
-          columns={[
-            { title: 'model_id', dataIndex: 'model_id', width: 220, render: (v: unknown) => renderCellText(v) },
-            { title: 'model_name', dataIndex: 'model_name', width: 220, render: (v: unknown) => renderCellText(v) },
-            { title: 'disease_agent', dataIndex: 'disease_agent', width: 180, render: (v: unknown) => renderCellText(v) },
-            { title: 'task_type', dataIndex: 'task_type', width: 180, render: (v: unknown) => renderCellText(v) },
-            { title: 'modality_scope', dataIndex: 'modality_scope', width: 220, render: (v: unknown) => Array.isArray(v) ? v.join(', ') : renderCellText(v) },
-            { title: 'owner_team', dataIndex: 'owner_team', width: 180, render: (v: unknown) => renderCellText(v) },
-            { title: 'is_active', dataIndex: 'is_active', width: 110, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? T('\u662f') : T('\u5426')}</Tag> },
-            { title: 'description', dataIndex: 'description', width: 320, render: (v: unknown) => renderCellText(v) },
-          ]}
-        />
-      </Card>
-
-      <Card title={T('\u5f53\u524d\u6a21\u578b\u8be6\u60c5')} loading={loadingDetail}>
-        <Space direction='vertical' size={8} style={{ width: '100%' }}>
-          <Typography.Text type='secondary'>{selectedModel ? T('\u5f53\u524d\u9009\u62e9\uff1a') + selectedModel.model_name : T('\u8bf7\u5148\u4ece\u4e0a\u65b9\u6a21\u578b\u5217\u8868\u9009\u62e9\u4e00\u4e2a\u6a21\u578b')}</Typography.Text>
-          <Typography.Text type='secondary'>{modelDetailNotice}</Typography.Text>
-        </Space>
-      </Card>
-
-      <Card title={T('\u521b\u5efa\u6a21\u578b\u7248\u672c')}>
+      <Modal title='新建版本' open={createVersionOpen} onCancel={() => setCreateVersionOpen(false)} onOk={() => void versionForm.submit()} confirmLoading={busyAction === 'create-version'} okText='创建'>
         <Form layout='vertical' form={versionForm} onFinish={handleCreateVersion}>
-          <Space size={16} wrap align='start' style={{ width: '100%' }}>
-            <Form.Item label='version_label' name='version_label' rules={[{ required: true, message: T('\u8bf7\u8f93\u5165 version_label') }]} style={{ minWidth: 220 }}>
-              <Input placeholder={T('\u4f8b\u5982\uff1av0.1.0')} />
-            </Form.Item>
-            <Form.Item label='artifact_ref' name='artifact_ref' rules={[{ required: true, message: T('\u8bf7\u8f93\u5165 artifact_ref') }]} style={{ minWidth: 360 }}>
-              <Input placeholder={T('\u4f8b\u5982\uff1astub://artifacts/capcop/v0.1.0')} />
-            </Form.Item>
-            <Form.Item label='notes' name='notes' style={{ minWidth: 360 }}>
-              <Input placeholder={T('\u7248\u672c\u8bf4\u660e\uff0c\u4ec5\u5143\u6570\u636e')} />
-            </Form.Item>
-            <Form.Item label='metrics_json' name='metrics_json' style={{ minWidth: 360 }}>
-              <Input.TextArea rows={2} placeholder={T('\u4f8b\u5982\uff1a{"auc":0.82,"f1":0.71}')} />
-            </Form.Item>
-            <Form.Item label='runtime_constraints_json' name='runtime_constraints_json' style={{ minWidth: 360 }}>
-              <Input.TextArea rows={2} placeholder={T('\u4f8b\u5982\uff1a{"cpu":"2","memory":"4Gi"}')} />
-            </Form.Item>
-            <Form.Item label='input_schema_json' name='input_schema_json' style={{ minWidth: 320 }}>
-              <Input.TextArea rows={2} placeholder={T('\u8f93\u5165 schema JSON\uff0c\u53ef\u7559\u7a7a')} />
-            </Form.Item>
-            <Form.Item label='output_schema_json' name='output_schema_json' style={{ minWidth: 320 }}>
-              <Input.TextArea rows={2} placeholder={T('\u8f93\u51fa schema JSON\uff0c\u53ef\u7559\u7a7a')} />
-            </Form.Item>
-          </Space>
-          <Button type='primary' htmlType='submit' loading={busyAction === 'create-version'} disabled={!selectedModelId}>{T('\u521b\u5efa demo version')}</Button>
+          <Form.Item label='version_label' name='version_label' rules={[{ required: true, message: '请输入 version_label' }]}><Input placeholder='例如：v0.1.0' /></Form.Item>
+          <Form.Item label='artifact_ref' name='artifact_ref' rules={[{ required: true, message: '请输入 artifact_ref' }]}><Input placeholder='例如：stub://artifacts/capcop/v0.1.0' /></Form.Item>
+          <Form.Item label='notes' name='notes'><Input placeholder='版本说明，仅元数据' /></Form.Item>
+          <Form.Item label='metrics_json' name='metrics_json'><Input.TextArea rows={2} placeholder='例如：{"auc":0.82,"f1":0.71}' /></Form.Item>
+          <Form.Item label='runtime_constraints_json' name='runtime_constraints_json'><Input.TextArea rows={2} placeholder='例如：{"cpu":"2","memory":"4Gi"}' /></Form.Item>
+          <Form.Item label='input_schema_json' name='input_schema_json'><Input.TextArea rows={2} placeholder='输入 schema JSON，可留空' /></Form.Item>
+          <Form.Item label='output_schema_json' name='output_schema_json'><Input.TextArea rows={2} placeholder='输出 schema JSON，可留空' /></Form.Item>
         </Form>
-      </Card>
+      </Modal>
 
-      <Card title={T('\u7248\u672c\u5217\u8868')}>
-        <Table
-          rowKey='version_id'
-          loading={loadingDetail}
-          dataSource={versionRows}
-          pagination={false}
-          scroll={{ x: 2200 }}
-          columns={[
-            { title: 'model_version_id', dataIndex: 'version_id', width: 220, render: (v: unknown) => renderCellText(v) },
-            { title: 'version_label', dataIndex: 'version_label', width: 150, render: (v: unknown) => renderCellText(v) },
-            { title: 'approval_state', dataIndex: 'approval_state', width: 150, render: (v: string) => <Tag color={versionStateColor(v)}>{renderCellText(v)}</Tag> },
-            { title: 'artifact_ref', dataIndex: 'artifact_ref', width: 280, render: (v: unknown) => renderCellText(v) },
-            { title: 'metrics', dataIndex: 'metrics', width: 240, render: (v: unknown) => renderJsonBlock(v) },
-            { title: 'runtime_constraints', dataIndex: 'runtime_constraints', width: 280, render: (v: unknown) => renderJsonBlock(v) },
-            { title: 'approved_by', dataIndex: 'approved_by', width: 180, render: (v: unknown) => renderCellText(v) },
-            { title: 'approved_at', dataIndex: 'approved_at', width: 220, render: (v: unknown) => renderCellText(v) },
-            { title: 'promoted_by', dataIndex: 'promoted_by', width: 180, render: (v: unknown) => renderCellText(v) },
-            { title: 'promoted_at', dataIndex: 'promoted_at', width: 220, render: (v: unknown) => renderCellText(v) },
-            {
-              title: T('\u64cd\u4f5c'),
-              dataIndex: 'version_id',
-              width: 420,
-              render: (_: string, row: VersionRow) => (
-                <Space wrap>
-                  <Button size='small' onClick={() => void handleInspectVersion(row.version_id)} loading={busyAction === 'inspect-' + row.version_id}>{T('\u67e5\u770b\u8bc4\u4f30')}</Button>
-                  <Button size='small' onClick={() => void handleApprove(row.version_id)} loading={busyAction === 'approve-' + row.version_id}>{T('\u6279\u51c6')}</Button>
-                  <Button size='small' onClick={() => void handlePromote(row.version_id, 'shadow')} loading={busyAction === 'promote-' + row.version_id + '-shadow'}>{T('\u8f6c shadow')}</Button>
-                  <Button size='small' onClick={() => void handlePromote(row.version_id, 'canary')} loading={busyAction === 'promote-' + row.version_id + '-canary'}>{T('\u8f6c canary')}</Button>
-                  <Button size='small' onClick={() => void handlePromote(row.version_id, 'default')} loading={busyAction === 'promote-' + row.version_id + '-default'}>{T('\u8f6c default')}</Button>
-                </Space>
-              )
-            },
-          ]}
-        />
-      </Card>
-
-      <Card title={T('\u56de\u6eda\u4e0e\u8bc4\u4f30')}>
+      <Modal title='版本回滚' open={rollbackOpen} onCancel={() => setRollbackOpen(false)} onOk={() => void rollbackForm.submit()} confirmLoading={busyAction === 'rollback'} okText='执行回滚'>
         <Form layout='vertical' form={rollbackForm} onFinish={handleRollback}>
-          <Space size={16} wrap align='start' style={{ width: '100%' }}>
-            <Form.Item label='version_id' name='version_id' rules={[{ required: true, message: T('\u8bf7\u8f93\u5165 version_id') }]} style={{ minWidth: 360 }}>
-              <Input placeholder={T('\u8981\u56de\u6eda\u7684\u7248\u672c ID')} />
-            </Form.Item>
-            <Form.Item label='target_version_id' name='target_version_id' rules={[{ required: true, message: T('\u8bf7\u8f93\u5165 target_version_id') }]} style={{ minWidth: 360 }}>
-              <Input placeholder={T('\u56de\u6eda\u76ee\u6807\u7248\u672c ID')} />
-            </Form.Item>
-          </Space>
-          <Button htmlType='submit' loading={busyAction === 'rollback'}>{T('\u6267\u884c\u56de\u6eda')}</Button>
+          <Form.Item label='version_id' name='version_id' rules={[{ required: true, message: '请输入 version_id' }]}><Input placeholder='要回滚的版本 ID' /></Form.Item>
+          <Form.Item label='target_version_id' name='target_version_id' rules={[{ required: true, message: '请输入 target_version_id' }]}><Input placeholder='回滚目标版本 ID' /></Form.Item>
         </Form>
-        <Space direction='vertical' size={8} style={{ width: '100%', marginTop: 16 }}>
-          <Typography.Text strong>{T('\u8bc4\u4f30\u6458\u8981')}</Typography.Text>
-          <Typography.Text type='secondary'>{selectedVersionId ? T('\u5f53\u524d\u67e5\u770b\u7248\u672c\uff1a') + selectedVersionId : T('\u8bf7\u70b9\u51fb\u201c\u67e5\u770b\u8bc4\u4f30\u201d\u52a0\u8f7d\u7248\u672c\u8bc4\u4f30\u6458\u8981')}</Typography.Text>
-          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', background: '#fafafa', padding: 12, borderRadius: 6 }}>{JSON.stringify(evaluations || {}, null, 2)}</pre>
-        </Space>
-      </Card>
-    </Space>
+      </Modal>
+    </main>
   );
 }

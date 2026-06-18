@@ -9,7 +9,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -246,9 +246,11 @@ def _write_shadow_audit(
     mode: str,
     assessment: Any,
     torch_available: bool,
+    execution_id: str | None = None,
 ) -> ShadowAuditWriteResult:
     started_at = datetime.now(UTC)
     completed_at = started_at
+    execution_token = str(execution_id or uuid4().hex)
     runtime_env = _build_runtime_env(
         snapshot=snapshot,
         case=case,
@@ -281,7 +283,7 @@ def _write_shadow_audit(
         error_code=error_code,
         error_detail_json=error_detail,
         output=output,
-        idempotency_key=f'fold5-one-shot:{snapshot.input_snapshot_id}:{trace_id}:{dry_run_label or "default"}',
+        idempotency_key=f'fold5-one-shot:{snapshot.input_snapshot_id}:{trace_id}:{dry_run_label or "default"}:{execution_token}',
     )
     return create_shadow_audit_record(db, payload)
 
@@ -305,6 +307,9 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
     trace_id = (payload.trace_id or snapshot.trace_id or '').strip()
     if not trace_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={'code': 'invalid_trace_id', 'message': 'trace_id is required'})
+    execution_id = str(getattr(payload, 'execution_id', '') or '').strip() or None
+    if not execution_id:
+        execution_id = uuid4().hex
 
     model, version = _model_version_row(db, snapshot.model_version_id)
     schema_item = build_model_input_schema_for_version(model, version)
@@ -331,6 +336,7 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             mode='one_shot_fold5_mri3d_subprocess',
             assessment=assessment,
             torch_available=False,
+            execution_id=execution_id,
         )
 
     assessment = build_model_input_assessment_from_schema(schema_item, snapshot.mapped_features_json or {})
@@ -358,6 +364,7 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             mode='one_shot_fold5_mri3d_subprocess',
             assessment=assessment,
             torch_available=False,
+            execution_id=execution_id,
         )
 
     runner_feature_columns = _runner_feature_columns()
@@ -404,6 +411,7 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             mode='one_shot_fold5_mri3d_subprocess',
             assessment=assessment,
             torch_available=False,
+            execution_id=execution_id,
         )
 
     runner_payload = runner_result.payload
@@ -442,6 +450,7 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             mode='one_shot_fold5_mri3d_subprocess',
             assessment=assessment,
             torch_available=False,
+            execution_id=execution_id,
         )
 
     probabilities = runner_payload.get('probabilities') if isinstance(runner_payload.get('probabilities'), dict) else {}
@@ -479,6 +488,10 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
             'runner_runtime': runner_payload.get('runtime') if isinstance(runner_payload.get('runtime'), dict) else {},
             'logits': runner_payload.get('logits') if isinstance(runner_payload.get('logits'), list) else [],
             'label_mapping': runner_payload.get('label_mapping') if isinstance(runner_payload.get('label_mapping'), dict) else {'CAP': 0, 'COP': 1},
+            'missing_features': runner_payload.get('missing_features') if isinstance(runner_payload.get('missing_features'), list) else list(assessment.missing_required_features),
+            'imputed_features': runner_payload.get('imputed_features') if isinstance(runner_payload.get('imputed_features'), list) else list(assessment.missing_required_features),
+            'imputation_strategy': str(runner_payload.get('imputation_strategy') or 'median_per_feature_after_numeric_coercion'),
+            'imputation_source': str(runner_payload.get('imputation_source') or 'training_artifact'),
         },
         'prediction_probability_json': {
             'CAP': float(probabilities.get('CAP', 0.0)),
@@ -517,6 +530,11 @@ def run_cap_cop_clinical_mlp_fold5_one_shot_shadow(
         },
         'input_quality_flags_json': {
             'missing_required_features': list(assessment.missing_required_features),
+            'missing_features': runner_payload.get('missing_features') if isinstance(runner_payload.get('missing_features'), list) else list(assessment.missing_required_features),
+            'imputed_features': runner_payload.get('imputed_features') if isinstance(runner_payload.get('imputed_features'), list) else list(assessment.missing_required_features),
+            'imputation_strategy': str(runner_payload.get('imputation_strategy') or 'median_per_feature_after_numeric_coercion'),
+            'imputation_source': str(runner_payload.get('imputation_source') or 'training_artifact'),
+            'clinical_missing_value_imputation_supported': True,
             'default_strategy_available': bool(assessment.default_strategy_available),
             'requires_doctor_confirmation': bool(assessment.requires_doctor_confirmation),
             'preprocess_artifact_applied': True,

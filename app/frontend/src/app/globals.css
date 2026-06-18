@@ -24,3 +24,27 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.workspace-table-window .ant-table-wrapper,
+.workspace-table-window .ant-spin-nested-loading,
+.workspace-table-window .ant-spin-container {
+  width: 100%;
+  max-width: 100%;
+}
+
+.workspace-table-window .ant-table {
+  min-width: 100%;
+}
+
+.workspace-table-window .ant-table-container {
+  border-radius: 0;
+}
+
+.workspace-table-window .ant-table-thead > tr > th {
+  background: #f8fafc;
+  font-weight: 600;
+}
+
+body {
+  overflow-x: hidden;
+}

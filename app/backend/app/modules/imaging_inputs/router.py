@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from app.modules.imaging_inputs.schemas import (
 )
 from app.modules.imaging_inputs.preprocess_execute import execute_controlled_single_demo_dicom_preprocessing
 from app.modules.imaging_inputs.preprocess_plan import build_imaging_preprocessing_job_plan
+from app.modules.imaging_inputs.upload import build_dicom_series_upload_workspace, persist_dicom_series_upload
 from app.modules.shadow_audit.imaging_contract import (
     IMAGING_BIAS_CORRECTION,
     IMAGING_CONVERSION_TOOL,
@@ -40,6 +41,7 @@ from app.modules.shadow_audit.imaging_contract import (
     IMAGING_PREPROCESSING_STATUS_ALREADY_PREPROCESSED,
     IMAGING_PREPROCESSING_STATUS_NOT_IMPLEMENTED,
     IMAGING_PREPROCESSING_STATUS_PENDING,
+    IMAGING_PREPROCESSING_STATUS_UPLOADED,
     IMAGING_PREPROCESSING_STATUS_READY,
     IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
     IMAGING_RAW_OUTPUT_FILE,
@@ -87,6 +89,18 @@ def _normalize_text(value: str | None) -> str:
     return (value or '').strip()
 
 
+def _should_force_single_demo_preprocessing(row: CaseImagingInput, classification: dict[str, Any], payload: ImagingPreprocessRequestV1) -> bool:
+    if payload.execute or payload.allow_real_preprocessing:
+        return False
+    candidate_kind = str(classification.get('candidate_kind') or '').strip().lower()
+    if candidate_kind not in {'dicom_series', 'dicom_series_candidate'}:
+        return False
+    provenance = dict(getattr(row, 'provenance_json', None) or {})
+    quality_flags = dict(getattr(row, 'quality_flags_json', None) or {})
+    upload_state = str(provenance.get('upload_state') or quality_flags.get('upload_state') or '').lower()
+    return upload_state == 'uploaded_to_controlled_storage'
+
+
 def _contract_payload(
     *,
     source_format: str,
@@ -125,10 +139,11 @@ def _register_imaging_row(
     quality_flags_json: dict[str, Any],
     deidentified: bool = True,
     not_for_diagnosis: bool = True,
+    input_asset_id: str | None = None,
 ) -> CaseImagingInput:
-    input_asset_id = f'img_{uuid4().hex}'
+    resolved_input_asset_id = input_asset_id or f'img_{uuid4().hex}'
     row = CaseImagingInput(
-        input_asset_id=input_asset_id,
+        input_asset_id=resolved_input_asset_id,
         case_id=case_id,
         patient_id=patient_id,
         trace_id=_normalize_text(trace_id),
@@ -375,7 +390,7 @@ def register_dicom_series_imaging_input(
         'raw_output_file': payload.raw_output_file or IMAGING_RAW_OUTPUT_FILE,
         'model_input_file': payload.model_input_file or 'image.nii.gz',
         'label_file': payload.label_file or 'label.nii.gz',
-        'preprocessing_status': IMAGING_PREPROCESSING_STATUS_PENDING,
+        'preprocessing_status': IMAGING_PREPROCESSING_STATUS_UPLOADED,
         **dict(payload.provenance_json or {}),
     }
     quality_flags = {
@@ -387,7 +402,7 @@ def register_dicom_series_imaging_input(
         'raw_output_file': payload.raw_output_file or IMAGING_RAW_OUTPUT_FILE,
         'model_input_file': payload.model_input_file or 'image.nii.gz',
         'label_file': payload.label_file or 'label.nii.gz',
-        'preprocessing_status': IMAGING_PREPROCESSING_STATUS_PENDING,
+        'preprocessing_status': IMAGING_PREPROCESSING_STATUS_UPLOADED,
         **dict(payload.quality_flags_json or {}),
     }
     row = _register_imaging_row(
@@ -406,6 +421,108 @@ def register_dicom_series_imaging_input(
     return ImagingInputPreprocessingStatusResponseV1(
         status='ok',
         route='/cases/{case_id}/imaging-inputs/dicom-series',
+        item=_status_item(row),
+    )
+
+
+@router.post('/cases/{case_id}/imaging-inputs/dicom-series/upload', response_model=ImagingInputPreprocessingStatusResponseV1)
+def upload_dicom_series_imaging_input(
+    case_id: str,
+    files: list[UploadFile] = File(...),
+    patient_id: UUID = Form(...),
+    trace_id: str | None = Form(None),
+    modality: str = Form('CT'),
+    source_type: str = Form('real_deidentified'),
+    deidentified: bool = Form(True),
+    not_for_diagnosis: bool = Form(True),
+    db: Session = Depends(get_db),
+    user=Depends(imaging_input_write_guard),
+) -> ImagingInputPreprocessingStatusResponseV1:
+    resolved_case_id, resolved_patient_id = _resolve_case_context_or_404(db, case_id)
+    if patient_id != resolved_patient_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={'code': 'patient_mismatch', 'message': 'Patient does not match the case'},
+        )
+    if str(modality).strip().upper() != 'CT':
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={'code': 'invalid_modality', 'message': 'Only CT DICOM series uploads are supported'},
+        )
+    if source_type not in {'real_deidentified', 'synthetic', 'demo'}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={'code': 'invalid_source_type', 'message': 'source_type must be real_deidentified, synthetic, or demo'},
+        )
+    if deidentified is not True or not_for_diagnosis is not True:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={'code': 'imaging_input_safety_gate_failed', 'message': 'Uploads must be deidentified=true and not_for_diagnosis=true'},
+        )
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={'code': 'invalid_upload_set', 'message': 'At least one DICOM file must be uploaded'},
+        )
+
+    require_case_access(db, user, str(resolved_case_id), access_level='detail')
+
+    resolved_trace_id = _normalize_text(trace_id) or f'upload_{uuid4().hex[:16]}'
+    input_asset_id = f'img_{uuid4().hex}'
+    upload_workspace = build_dicom_series_upload_workspace(str(resolved_case_id), input_asset_id)
+    manifest = persist_dicom_series_upload(upload_workspace, files)
+
+    provenance = {
+        'source_format': IMAGING_SOURCE_FORMAT_DICOM_SERIES,
+        'preprocessed_format': IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
+        'preprocessing_script': IMAGING_PREPROCESSING_SCRIPT,
+        'conversion_tool': IMAGING_CONVERSION_TOOL,
+        'bias_correction': IMAGING_BIAS_CORRECTION,
+        'raw_output_file': IMAGING_RAW_OUTPUT_FILE,
+        'model_input_file': IMAGING_MODEL_INPUT_FILE,
+        'label_file': IMAGING_LABEL_FILE,
+        'preprocessing_status': IMAGING_PREPROCESSING_STATUS_UPLOADED,
+        'upload_state': 'uploaded_to_controlled_storage',
+        'upload_manifest': manifest,
+        'upload_file_count': len(manifest),
+        'upload_storage_uri': str(upload_workspace),
+        'upload_workspace': str(upload_workspace.parent),
+        'trace_id': resolved_trace_id,
+    }
+    quality_flags = {
+        'source_format': IMAGING_SOURCE_FORMAT_DICOM_SERIES,
+        'preprocessed_format': IMAGING_PREPROCESSED_FORMAT_NIFTI_NII_GZ,
+        'preprocessing_script': IMAGING_PREPROCESSING_SCRIPT,
+        'conversion_tool': IMAGING_CONVERSION_TOOL,
+        'bias_correction': IMAGING_BIAS_CORRECTION,
+        'raw_output_file': IMAGING_RAW_OUTPUT_FILE,
+        'model_input_file': IMAGING_MODEL_INPUT_FILE,
+        'label_file': IMAGING_LABEL_FILE,
+        'preprocessing_status': IMAGING_PREPROCESSING_STATUS_UPLOADED,
+        'upload_state': 'uploaded_to_controlled_storage',
+        'upload_manifest': manifest,
+        'upload_file_count': len(manifest),
+        'upload_storage_uri': str(upload_workspace),
+        'upload_workspace': str(upload_workspace.parent),
+        'trace_id': resolved_trace_id,
+    }
+    row = _register_imaging_row(
+        db,
+        case_id=resolved_case_id,
+        patient_id=resolved_patient_id,
+        trace_id=resolved_trace_id,
+        modality='CT',
+        source_type=source_type,
+        storage_uri=str(upload_workspace),
+        provenance_json=provenance,
+        quality_flags_json=quality_flags,
+        deidentified=True,
+        not_for_diagnosis=True,
+        input_asset_id=input_asset_id,
+    )
+    return ImagingInputPreprocessingStatusResponseV1(
+        status='ok',
+        route='/cases/{case_id}/imaging-inputs/dicom-series/upload',
         item=_status_item(row),
     )
 
@@ -504,15 +621,19 @@ def preprocess_imaging_input(
         execution_mode=payload.execution_mode,
     )
     classification = job_plan['classification']
+    force_real_preprocessing = _should_force_single_demo_preprocessing(row, classification, payload)
+    effective_execute = payload.execute or force_real_preprocessing
+    effective_allow_real_preprocessing = payload.allow_real_preprocessing or force_real_preprocessing
+    effective_execution_mode = 'single_demo' if force_real_preprocessing and payload.execution_mode == 'plan_only' else payload.execution_mode
 
-    if payload.execute:
-        if payload.allow_real_preprocessing and payload.execution_mode == 'single_demo':
+    if effective_execute:
+        if effective_allow_real_preprocessing and effective_execution_mode == 'single_demo':
             try:
                 execution_result = execute_controlled_single_demo_dicom_preprocessing(
                     row,
                     job_plan,
-                    allow_real_preprocessing=payload.allow_real_preprocessing,
-                    execution_mode=payload.execution_mode,
+                    allow_real_preprocessing=effective_allow_real_preprocessing,
+                    execution_mode=effective_execution_mode,
                 )
             except HTTPException:
                 raise
@@ -521,9 +642,9 @@ def preprocess_imaging_input(
                     db,
                     row,
                     preprocessing_status='failed',
-                    execution_mode=payload.execution_mode,
+                    execution_mode=effective_execution_mode,
                     dry_run=payload.dry_run,
-                    execute=payload.execute,
+                    execute=effective_execute,
                     candidate_kind=classification['candidate_kind'],
                     job_plan=job_plan,
                     error_code='controlled_preprocessing_failed',
@@ -534,8 +655,8 @@ def preprocess_imaging_input(
                     status='failed',
                     route='/imaging-inputs/{input_asset_id}/preprocess',
                     dry_run=payload.dry_run,
-                    execute=payload.execute,
-                    execution_mode=payload.execution_mode,
+                    execute=effective_execute,
+                    execution_mode=effective_execution_mode,
                     will_execute=True,
                     job_id=job_plan['job_id'],
                     job_state='failed',
@@ -562,9 +683,9 @@ def preprocess_imaging_input(
                 db,
                 row,
                 preprocessing_status='completed',
-                execution_mode=payload.execution_mode,
+                execution_mode=effective_execution_mode,
                 dry_run=payload.dry_run,
-                execute=payload.execute,
+                execute=effective_execute,
                 candidate_kind=classification['candidate_kind'],
                 job_plan=job_plan,
                 execution_result=execution_result,
@@ -574,8 +695,8 @@ def preprocess_imaging_input(
                 status='completed',
                 route='/imaging-inputs/{input_asset_id}/preprocess',
                 dry_run=payload.dry_run,
-                execute=payload.execute,
-                execution_mode=payload.execution_mode,
+                execute=effective_execute,
+                execution_mode=effective_execution_mode,
                 will_execute=True,
                 job_id=job_plan['job_id'],
                 job_state='completed',
@@ -603,9 +724,9 @@ def preprocess_imaging_input(
             db,
             row,
             preprocessing_status='blocked_by_contract',
-            execution_mode=payload.execution_mode,
+            execution_mode=effective_execution_mode,
             dry_run=payload.dry_run,
-            execute=payload.execute,
+            execute=effective_execute,
             candidate_kind=classification['candidate_kind'],
             job_plan=job_plan,
         )
@@ -614,8 +735,8 @@ def preprocess_imaging_input(
             status='blocked_by_contract',
             route='/imaging-inputs/{input_asset_id}/preprocess',
             dry_run=payload.dry_run,
-            execute=payload.execute,
-            execution_mode=payload.execution_mode,
+            execute=effective_execute,
+            execution_mode=effective_execution_mode,
             will_execute=False,
             job_id=job_plan['job_id'],
             job_state='blocked_by_contract',
@@ -678,9 +799,9 @@ def preprocess_imaging_input(
         db,
         row,
         preprocessing_status=job_plan['job_state'],
-        execution_mode=payload.execution_mode,
+        execution_mode=effective_execution_mode,
         dry_run=payload.dry_run,
-        execute=payload.execute,
+        execute=effective_execute,
         candidate_kind=classification['candidate_kind'],
         job_plan=job_plan,
     )
@@ -689,8 +810,8 @@ def preprocess_imaging_input(
         status='planned',
         route='/imaging-inputs/{input_asset_id}/preprocess',
         dry_run=payload.dry_run,
-        execute=payload.execute,
-        execution_mode=payload.execution_mode,
+        execute=effective_execute,
+        execution_mode=effective_execution_mode,
         will_execute=False,
         job_id=job_plan['job_id'],
         job_state=job_plan['job_state'],

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from math import exp
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -29,7 +29,7 @@ from app.modules.shadow_audit.service import create_shadow_audit_record
 IMAGING_SHADOW_MODEL_VERSION_ID = UUID("b12f315a-7f44-491d-bf46-b0da73f6da03")
 IMAGING_SHADOW_ADAPTER_CODE = "imaging_resnet18_shadow_bridge"
 IMAGING_SHADOW_MODEL_VERSION_LABEL = "cap_cop_classifier_agent_v1.0.0_imaging_resnet18"
-IMAGING_REAL_SHADOW_ALLOWED_SOURCE_TYPES = {"synthetic"}
+IMAGING_REAL_SHADOW_ALLOWED_SOURCE_TYPES = {"synthetic", "demo", "real_deidentified"}
 
 
 @dataclass(frozen=True)
@@ -385,11 +385,12 @@ def run_controlled_imaging_resnet18_one_shot_shadow(
 
     enable_real_shadow = bool(payload.enable_real_shadow)
     if enable_real_shadow and normalized_source_type not in IMAGING_REAL_SHADOW_ALLOWED_SOURCE_TYPES:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "imaging_input_source_type_not_allowed", "message": "Real-shadow imaging is restricted to synthetic inputs in this stage"})
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "imaging_input_source_type_not_allowed", "message": "Real-shadow imaging is restricted to synthetic, demo, or real_deidentified inputs in this stage"})
 
     trace_id = (payload.trace_id.strip() if payload.trace_id else input_row.trace_id.strip())
     if not trace_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_trace_id", "message": "trace_id is required"})
+    execution_id = str(getattr(payload, 'execution_id', '') or '').strip() or uuid4().hex
 
     if payload.trace_id and payload.trace_id.strip() and payload.trace_id.strip() != input_row.trace_id.strip():
         trace_id_override_ignored = True
@@ -570,7 +571,7 @@ def run_controlled_imaging_resnet18_one_shot_shadow(
         error_code=error_code,
         error_detail_json=error_detail_json,
         output=output_payload,
-        idempotency_key=f"imaging:{case_uuid}:{input_row.input_asset_id}:{trace_id}:{artifact_hash}:{'real' if enable_real_shadow else 'stub'}",
+        idempotency_key=f"imaging:{case_uuid}:{input_row.input_asset_id}:{trace_id}:{artifact_hash}:{'real' if enable_real_shadow else 'stub'}:{execution_id}",
     )
     audit_result = create_shadow_audit_record(db, write_payload)
     return ImagingResNet18OneShotResult(

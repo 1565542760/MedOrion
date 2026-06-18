@@ -1,1499 +1,191 @@
-﻿
 'use client';
 
-import Link from 'next/link';
-import axios from 'axios';
-import { use, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Col, Descriptions, Input, InputNumber, Row, Select, Space, Spin, Table, Tag, Typography } from 'antd';
+import { use, useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Button, Drawer, Input, InputNumber, Select, Space, Table, Tag, Typography } from 'antd';
+import { CaseSubNav } from '@/components/CaseSubNav';
+import { WorkspaceTableShell } from '@/components/WorkspaceTableShell';
 import {
+  formatApiErrorMessage,
   createClinicalTableSnapshotFromValidation,
-  getModel,
-  getModelFeatureRequirements,
-  getModelInputSchema,
-  listModelInputSnapshotsByCase,
+  getModelInputSnapshot,
   listCases,
-  listModels,
-  previewModelSelection,
+  listModelInputSnapshotsByCase,
+  listPatients,
   validateClinicalTableInput,
-  type ClinicalTableControlledSnapshotCreateRequestV1,
-  type ClinicalTableControlledSnapshotCreateResponseV1,
-  type ClinicalTableStrictValidationRequestV1,
+  type CaseItem,
+  type ClinicalTableStrictFeatureMappingItemV1,
   type ClinicalTableStrictValidationResponseV1,
-  type ModelInputFeatureRequirement,
-  type ModelInputPreviewItem,
-  type ModelInputSchemaResponse,
-  type ModelSelectionCandidate,
-  type ModelSelectionPreviewResponse,
-  type ModelInputSnapshotSummaryItem,
-  type ModelVersionItem,
+  type PatientItem,
 } from '@/lib/api';
 
-type CaseRecord = {
-  case_id: string;
-  case_no?: string | null;
-  disease_task?: string | null;
-  status?: string | null;
-  trace_id?: string | null;
-  patient_id?: string | null;
-  chief_complaint?: string | null;
-};
+type Params = { caseId: string };
+type FieldType = 'number' | 'binary' | 'coded_sputum';
+type FieldDefinition = { order: number; model: string; label: string; type: FieldType; coding: string; note: string };
+type DraftValues = Record<string, number | string | null | undefined>;
+type CsvPreviewRow = { key: string; rawColumn: string; targetFeature: string | null; rawValue: string; parsedValue: number | string | null; status: 'matched' | 'unmatched' | 'empty' };
 
-type ModelVersionOption = ModelVersionItem & {
-  model_name: string;
-  disease_agent: string;
-  task_type: string;
-  modality_scope: string[];
-  owner_team: string;
-  description?: string | null;
-  is_active: boolean;
-  model_input_schema_id?: string | null;
-  model_input_schema_key?: string | null;
-  lifecycle_status?: string | null;
-  supported_modalities?: string[];
-};
-
-function extractErrorCode(error: unknown) {
-  if (axios.isAxiosError(error)) {
-    const data = error.response?.data as {
-      detail?: { code?: string; message?: string } | string;
-      code?: string;
-      message?: string;
-    } | undefined;
-
-    if (typeof data?.detail === 'string') return data.detail;
-    if (data?.detail && typeof data.detail === 'object' && data.detail.code) return data.detail.code;
-    if (data?.code) return data.code;
-    if (data?.message) return data.message;
-    if (error.response?.status === 404) return 'not_found';
-    if (error.response?.status === 422) return 'validation_error';
+function normalizeSnapshotValue(feature: string, value: unknown) {
+  const field = FIELD_BY_MODEL.get(feature);
+  if (!field) return value;
+  if (field.type === 'binary') {
+    if (value === true) return 1;
+    if (value === false) return 0;
   }
-
-  if (error instanceof Error) return error.message;
-  return 'unknown_error';
-}
-
-function translateError(error: unknown) {
-  const code = extractErrorCode(error);
-  switch (code) {
-    case 'case_not_found':
-      return '病例不存在';
-    case 'model_input_schema_not_found':
-      return '模型输入契约未找到';
-    case 'unsupported_disease_task':
-      return '当前病种任务暂不支持该输入页面';
-    case 'insufficient_data_for_assessment':
-      return '当前数据不足以判断';
-    case 'missing_required_features':
-      return '缺少必需字段，不能 silent fallback';
-    case 'validation_error':
-      return '请求参数校验未通过';
-    case 'invalid_source_type':
-      return '来源类型不正确';
-    case 'not_for_diagnosis_required':
-      return '必须标记为非诊断';
-    case 'shadow_only_required':
-      return '必须标记为仅用于评估';
-    case 'artifact_order_mismatch':
-      return '字段顺序与训练契约不一致';
-    case 'type_coercion_failed':
-      return '部分字段格式不正确';
-    case 'no_row_data_provided':
-      return '未提供一行样例数据';
-    case 'not_found':
-      return '请求的资源不存在';
-    default:
-      return code && code !== 'unknown_error' ? '请求失败：' + code : '请求失败，请稍后重试';
+  if (field.type === 'coded_sputum' && typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : value;
   }
+  return value;
 }
 
-function renderTags(values: string[] | undefined, color: string = 'default') {
-  if (!values || values.length === 0) return '-';
-  return (
-    <Space wrap size={[6, 6]}>
-      {values.map((value) => (
-        <Tag key={value} color={color}>{value}</Tag>
-      ))}
-    </Space>
-  );
-}
-
-function renderFeatureBool(value?: boolean | null) {
-  return value ? <Tag color='green'>是</Tag> : <Tag>否</Tag>;
-}
-
-function getProvidedFeatures(item: ModelInputPreviewItem | null) {
-  if (!item) return [] as string[];
-  if (Array.isArray(item.provided_features)) return item.provided_features.map((x) => String(x));
-  if (item.mapped_features && typeof item.mapped_features === 'object') return Object.keys(item.mapped_features);
-  return [] as string[];
-}
-
-function getMissingRequiredQuestions(item: ModelInputPreviewItem | null) {
-  if (!item) return [] as string[];
-  const fromDetails = (item.missing_required_details || [])
-    .map((detail) => detail.suggested_doctor_question)
-    .filter((value): value is string => !!value);
-  if (fromDetails.length > 0) return fromDetails;
-  return item.suggested_doctor_questions || [];
-}
-
-function getStrictValidationStatusLabel(value?: string | null) {
-  switch (value) {
-    case 'ready_for_inference':
-      return '可用于输入快照';
-    case 'schema_unverified':
-      return '字段未通过校验';
-    case 'insufficient_data_for_assessment':
-      return '当前数据不足以判断';
-    default:
-      return value || '-';
+function snapshotToValues(snapshot: { mapped_features?: Record<string, unknown> | null }) {
+  const next: DraftValues = {};
+  const mapped = snapshot.mapped_features || {};
+  for (const [feature, value] of Object.entries(mapped)) {
+    next[feature] = normalizeSnapshotValue(feature, value) as DraftValues[string];
   }
+  return next;
 }
 
-function getStrictValidationStatusColor(value?: string | null) {
-  switch (value) {
-    case 'ready_for_inference':
-      return 'green';
-    case 'schema_unverified':
-      return 'orange';
-    case 'insufficient_data_for_assessment':
-      return 'red';
-    default:
-      return 'default';
-  }
-}
+const SPUTUM_FIELD = 'Sputum production (0 none; 1 white; 2 yellow; 3 bloody; 4 not specified; 5 rust-colored; 6 green)';
 
-function buildPreviewItemFromStrictValidation(
-  result: ClinicalTableStrictValidationResponseV1,
-  featureRows: ModelInputFeatureRequirement[],
-  selectedVersionId: string,
-  caseRecord: CaseRecord | null,
-  schema: ModelInputSchemaResponse | null,
-): ModelInputPreviewItem {
-  const featureMap = new Map(featureRows.map((item) => [item.model_feature_name, item] as const));
-  const provided = result.feature_mappings
-    .filter((item) => item.present && item.coercion_status === 'ok')
-    .map((item) => item.model_feature_name);
-  const mappedFeatures = Object.fromEntries(
-    result.feature_mappings
-      .filter((item) => item.present && item.coercion_status === 'ok')
-      .map((item) => [item.model_feature_name, item.coerced_value ?? item.sample_value ?? true]),
-  );
-  const missingRequired = result.missing_required_features;
-  const defaultable = featureRows.filter((item) => item.defaultable).map((item) => item.model_feature_name);
-  const details = missingRequired.map((name) => {
-    const feature = featureMap.get(name);
-    return {
-      model_feature_name: name,
-      source_clinical_field: feature?.source_clinical_field || name,
-      why_required: feature?.notes || '训练 artifact 必需字段',
-      default_strategy: feature?.default_strategy || null,
-      missing_value_policy: feature?.missing_value_policy || null,
-      suggested_doctor_question: (feature ? getFeatureDisplayName(feature) : name) + ' 请补充或修正。',
-    };
-  });
-  return {
-    model_version_id: selectedVersionId,
-    model_input_schema_id: schema?.model_input_schema_id || 'clinical_mlp_cap_cop_input_schema_v1',
-    model_input_schema_key: schema?.model_input_schema_key || 'clinical_mlp_cap_cop_input_schema_v1',
-    disease_task_feature_set_id: schema?.disease_task_feature_set_id || 'cap_cop_clinical_feature_set_v1',
-    disease_task_feature_set_key: schema?.disease_task_feature_set_key || 'cap_cop_clinical_feature_set_v1',
-    disease_task: caseRecord?.disease_task || null,
-    mapped_features: mappedFeatures,
-    provided_features: provided,
-    missing_features: result.extra_raw_columns.length > 0 ? result.extra_raw_columns : missingRequired,
-    missing_required_features: missingRequired,
-    missing_required_details: details,
-    defaultable_features: defaultable,
-    suggested_doctor_questions: details.map((item) => item.suggested_doctor_question || '').filter((value): value is string => !!value),
-    current_assessment_status: result.validation_status,
-    insufficient_data_for_assessment: result.validation_status !== 'ready_for_inference',
-  };
-}
+const FIELDS: FieldDefinition[] = [
+  { order: 1, model: 'Age', label: '年龄', type: 'number', coding: '数值', note: '患者年龄' },
+  { order: 2, model: 'Height', label: '身高', type: 'number', coding: '数值', note: '单位按训练表格保持一致' },
+  { order: 3, model: 'Weight', label: '体重', type: 'number', coding: '数值', note: '单位按训练表格保持一致' },
+  { order: 4, model: 'BMI', label: 'BMI', type: 'number', coding: '数值', note: '体重指数' },
+  { order: 5, model: 'Hospitalization_duration', label: '住院时长', type: 'number', coding: '数值', note: '剔除入院/出院日期后保留的时长字段' },
+  { order: 6, model: 'Upper_left_lung', label: '左上肺', type: 'binary', coding: '0 否 / 1 是', note: '病灶部位' },
+  { order: 7, model: 'Lower_left_lung', label: '左下肺', type: 'binary', coding: '0 否 / 1 是', note: '病灶部位' },
+  { order: 8, model: 'Right_upper_lung', label: '右上肺', type: 'binary', coding: '0 否 / 1 是', note: '病灶部位' },
+  { order: 9, model: 'Right_middle_lung', label: '右中肺', type: 'binary', coding: '0 否 / 1 是', note: '病灶部位' },
+  { order: 10, model: 'Right_lower_lung', label: '右下肺', type: 'binary', coding: '0 否 / 1 是', note: '病灶部位' },
+  { order: 11, model: 'Whole_lung_lesion', label: '全肺病变', type: 'binary', coding: '0 否 / 1 是', note: '病灶范围' },
+  { order: 12, model: 'The_lesion_is_located_subpleurally', label: '胸膜下病变', type: 'binary', coding: '0 否 / 1 是', note: '病灶是否位于胸膜下' },
+  { order: 13, model: 'dizziness', label: '晕征', type: 'binary', coding: '0 否 / 1 是', note: '影像征象' },
+  { order: 14, model: 'Anti-dizziness_signs', label: '反晕征', type: 'binary', coding: '0 否 / 1 是', note: '影像征象' },
+  { order: 15, model: 'Tree_Bud_Syndrome', label: '树芽征', type: 'binary', coding: '0 否 / 1 是', note: '影像征象' },
+  { order: 16, model: 'Striated_shadow', label: '条索状影', type: 'binary', coding: '0 否 / 1 是', note: '影像征象' },
+  { order: 17, model: 'Frosted_Glass_Shadow', label: '磨玻璃影', type: 'binary', coding: '0 否 / 1 是', note: '影像征象' },
+  { order: 18, model: 'Bronchial_inflation_sign', label: '支气管充气征', type: 'binary', coding: '0 否 / 1 是', note: '影像征象' },
+  { order: 19, model: 'Hilar_lymphadenopathy', label: '肺门淋巴结肿大', type: 'binary', coding: '0 否 / 1 是', note: '影像征象' },
+  { order: 20, model: 'Pleural_traction', label: '胸膜牵拉', type: 'binary', coding: '0 否 / 1 是', note: '影像征象' },
+  { order: 21, model: 'Fever', label: '发热', type: 'binary', coding: '0 否 / 1 是', note: '临床症状' },
+  { order: 22, model: 'Cough', label: '咳嗽', type: 'binary', coding: '0 否 / 1 是', note: '二值字段，不是咳痰编码' },
+  { order: 23, model: SPUTUM_FIELD, label: '咳痰', type: 'coded_sputum', coding: '0 无痰 / 1 白痰 / 2 黄痰 / 3 血痰 / 4 未说明 / 5 铁锈色痰 / 6 绿色痰', note: '独立于咳嗽字段' },
+  { order: 24, model: 'chest_tightness', label: '胸闷', type: 'binary', coding: '0 否 / 1 是', note: '临床症状' },
+  { order: 25, model: 'Shortness_of_breath', label: '气短', type: 'binary', coding: '0 否 / 1 是', note: '临床症状' },
+  { order: 26, model: 'Coughing_up_blood', label: '咯血', type: 'binary', coding: '0 否 / 1 是', note: '临床症状' },
+  { order: 27, model: 'Weight_loss', label: '体重下降', type: 'binary', coding: '0 否 / 1 是', note: '临床症状' },
+  { order: 28, model: 'Lymphocyte_count', label: '淋巴细胞计数', type: 'number', coding: '数值', note: '实验室指标' },
+  { order: 29, model: 'ESR', label: '血沉', type: 'number', coding: '数值', note: '实验室指标' },
+  { order: 30, model: 'C-reactive_protein', label: 'C反应蛋白', type: 'number', coding: '数值', note: '实验室指标' },
+  { order: 31, model: 'High-sensitivity_C-reactive_protein', label: '超敏C反应蛋白', type: 'number', coding: '数值', note: '实验室指标' },
+  { order: 32, model: 'Procalcitonin', label: '降钙素原', type: 'number', coding: '数值', note: '实验室指标' },
+  { order: 33, model: 'CEA', label: 'CEA', type: 'number', coding: '数值', note: '肿瘤标志物' },
+  { order: 34, model: 'CA153', label: 'CA153', type: 'number', coding: '数值', note: '肿瘤标志物' },
+  { order: 35, model: 'Serum_non-small_cell lung_cancer-related antigen', label: '血清非小细胞肺癌相关抗原', type: 'number', coding: '数值', note: '肿瘤标志物' },
+  { order: 36, model: 'Striated_shadow.1', label: '网格状影', type: 'binary', coding: '0 否 / 1 是', note: '训练表格保留字段，不能与条索状影互换' },
+];
 
-type SnapshotValue = number | string | null;
+const FIELD_BY_MODEL = new Map(FIELDS.map((field) => [field.model, field]));
+const FIELD_BY_LABEL = new Map(FIELDS.map((field) => [field.label, field]));
 
-function normalizeContractToken(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
+function statusColor(value?: string | null) { if (value === 'ready_for_inference') return 'green'; if (value === 'insufficient_data_for_assessment') return 'red'; if (value === 'schema_unverified') return 'orange'; return 'default'; }
+function statusText(value?: string | null) { if (value === 'ready_for_inference') return '可创建快照'; if (value === 'insufficient_data_for_assessment') return '必填字段缺失'; if (value === 'schema_unverified') return '字段需修正'; return '待校验'; }
 
-function splitCsvLine(value: string) {
-  return value
-    .split(',')
-    .map((item) => item.trim().replace(/^\"|\"$/g, ''))
-    .filter((item, index, array) => !(index === array.length - 1 && item === ''));
-}
+function parseCsvLine(line: string) { const result: string[] = []; let current = ''; let quoted = false; for (let i = 0; i < line.length; i += 1) { const char = line[i]; if (char === '"') quoted = !quoted; else if (char === ',' && !quoted) { result.push(current.trim()); current = ''; } else current += char; } result.push(current.trim()); return result; }
+function parseNumberLike(value: string) { const trimmed = value.trim(); if (!trimmed || trimmed === '无' || trimmed === '未知' || trimmed === '-') return null; const normalized = trimmed.replace('？', '').replace('?', ''); const num = Number(normalized); return Number.isFinite(num) ? num : trimmed; }
+function valueForBackend(values: DraftValues) { const row: Record<string, unknown> = {}; for (const field of FIELDS) { const value = values[field.model]; if (value !== undefined && value !== null && value !== '') row[field.model] = value; } return row; }
+function buildPayload(values: DraftValues, sourceType: 'manual_entry' | 'csv_paste') { const sampleRow = valueForBackend(values); return { raw_columns: FIELDS.map((field) => field.model), rows: [sampleRow], sample_row: sampleRow, source_type: sourceType, not_for_diagnosis: true, shadow_only: true }; }
+function fieldValidation(feature: string, result: ClinicalTableStrictValidationResponseV1 | null): ClinicalTableStrictFeatureMappingItemV1 | null { return result?.feature_mappings.find((item) => item.model_feature_name === feature) || null; }
+function matchColumn(column: string) { return FIELD_BY_MODEL.get(column) || FIELD_BY_LABEL.get(column) || null; }
 
-function parseCsvPreview(text: string) {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const headers = lines[0] ? splitCsvLine(lines[0]) : [];
-  const sampleRow = lines[1] ? splitCsvLine(lines[1]) : [];
-  return { headers, sampleRow };
-}
-
-const FEATURE_LABEL_MAP: Record<string, string> = {
-  Age: '年龄',
-  Sex: '性别',
-  Temperature: '体温',
-  HeartRate: '心率',
-  RespiratoryRate: '呼吸频率',
-  SPO2: '血氧饱和度',
-  SystolicBP: '收缩压',
-  DiastolicBP: '舒张压',
-  WBC: '白细胞',
-  NeutrophilPercent: '中性粒细胞百分比',
-  LymphocytePercent: '淋巴细胞百分比',
-  CRP: 'C 反应蛋白',
-  Procalcitonin: '降钙素原',
-  ESR: '血沉',
-  Hemoglobin: '血红蛋白',
-  Platelet: '血小板',
-  Sodium: '钠',
-  Potassium: '钾',
-  Chloride: '氯',
-  BUN: '尿素氮',
-  Creatinine: '肌酐',
-  ALT: '丙氨酸转氨酶',
-  AST: '天门冬氨酸转氨酶',
-  Albumin: '白蛋白',
-  Glucose: '血糖',
-  Cough: '咳嗽',
-  Fever: '发热',
-  Dyspnea: '呼吸困难',
-  ChestPain: '胸痛',
-  Wheeze: '喘鸣',
-  Crackles: '湿啰音',
-  Consolidation: '实变',
-  PleuralEffusion: '胸腔积液',
-  Infiltration: '浸润',
-  'Striated_shadow.1': '网格状影',
-  SmokingHistory: '吸烟史',
-};
-
-function getFeatureDisplayName(item: ModelInputFeatureRequirement) {
-  return FEATURE_LABEL_MAP[item.model_feature_name] || item.source_clinical_field || item.model_feature_name;
-}
-
-const RAW_FIELD_LABEL_MAP: Record<string, string> = {
-  Classification: '分型标签',
-  Desensitized_ID: '脱敏病例 ID',
-  Age: '年龄',
-  Height: '身高',
-  Weight: '体重',
-  BMI: 'BMI',
-  Hospitalization_duration: '住院时长',
-  Upper_left_lung: '左上肺',
-  Lower_left_lung: '左下肺',
-  Right_upper_lung: '右上肺',
-  Right_middle_lung: '右中肺',
-  Right_lower_lung: '右下肺',
-  Whole_lung_lesion: '全肺病灶',
-  The_lesion_is_located_subpleurally: '病灶贴胸膜',
-  dizziness: '头晕',
-  'Anti-dizziness_signs': '头晕伴随体征',
-  Tree_Bud_Syndrome: '树芽征',
-  Striated_shadow: '条索影',
-  Frosted_Glass_Shadow: '磨玻璃影',
-  Bronchial_inflation_sign: '支气管充气征',
-  Hilar_lymphadenopathy: '肺门淋巴结肿大',
-  Pleural_traction: '胸膜牵拉',
-  Fever: '发热',
-  Cough: '咳嗽',
-  'Sputum production (0 none; 1 white; 2 yellow; 3 bloody; 4 not specified; 5 rust-colored; 6 green)': '咳痰',
-  chest_tightness: '胸闷',
-  Shortness_of_breath: '呼吸困难',
-  Coughing_up_blood: '咯血',
-  Weight_loss: '体重下降',
-  Lymphocyte_count: '淋巴细胞计数',
-  ESR: '血沉',
-  'C-reactive_protein': 'C 反应蛋白',
-  'High-sensitivity_C-reactive_protein': '高敏 C 反应蛋白',
-  Procalcitonin: '降钙素原',
-  CEA: '癌胚抗原',
-  CA153: 'CA15-3',
-  'Serum_non-small_cell lung_cancer-related antigen': '血清非小细胞肺癌相关抗原',
-};
-
-function getSourceFieldDisplayName(item: ModelInputFeatureRequirement) {
-  return RAW_FIELD_LABEL_MAP[item.source_clinical_field] || item.source_clinical_field || '-';
-}
-
-type FieldSourceStatus = 'preprocess_artifact_confirmed' | 'product_schema_only' | 'csv_synonym' | 'unverified';
-
-function getFieldSourceStatus(item: ModelInputFeatureRequirement): FieldSourceStatus {
-  if (item.model_feature_name === 'Sex') return 'unverified';
-  if (item.model_feature_name === 'Striated_shadow.1') return 'product_schema_only';
-  if (item.model_feature_name === 'Dyspnea' || item.model_feature_name === 'CRP' || item.model_feature_name === 'Procalcitonin') {
-    return 'csv_synonym';
-  }
-  return 'product_schema_only';
-}
-
-function getFieldSourceStatusLabel(status: FieldSourceStatus) {
-  switch (status) {
-    case 'preprocess_artifact_confirmed':
-      return '预处理制品已确认';
-    case 'product_schema_only':
-      return '产品 schema';
-    case 'csv_synonym':
-      return 'CSV 同义字段';
-    case 'unverified':
-      return '待确认';
-    default:
-      return status;
-  }
-}
-
-function getFieldSourceStatusColor(status: FieldSourceStatus) {
-  switch (status) {
-    case 'preprocess_artifact_confirmed':
-      return 'green';
-    case 'csv_synonym':
-      return 'blue';
-    case 'product_schema_only':
-      return 'gold';
-    case 'unverified':
-      return 'orange';
-    default:
-      return 'default';
-  }
-}
-
-function getFeatureTypeLabel(item: ModelInputFeatureRequirement) {
-  if (item.model_feature_name === 'Striated_shadow.1') return '历史保留字段 / 网格状影';
-  switch (item.feature_type) {
-    case 'numeric':
-      return '数值';
-    case 'boolean':
-      return '二值';
-    case 'categorical':
-      return '分类';
-    default:
-      return '待确认';
-  }
-}
-
-function isEmptySnapshotValue(value: SnapshotValue) {
-  return value === null || value === undefined || Number.isNaN(value);
-}
-
-function buildSyntheticBaseline(requirements: ModelInputFeatureRequirement[]) {
-  const baseline: Record<string, SnapshotValue> = {};
-  requirements.forEach((item, index) => {
-    if (item.model_feature_name === 'Sex') {
-      baseline[item.model_feature_name] = 'male';
-      return;
-    }
-    if (item.model_feature_name === 'Dyspnea') {
-      baseline[item.model_feature_name] = 'mild';
-      return;
-    }
-    if (item.model_feature_name === 'Cough') {
-      baseline[item.model_feature_name] = 0;
-      return;
-    }
-    if (item.model_feature_name === 'Sputum production (0 none; 1 white; 2 yellow; 3 bloody; 4 not specified; 5 rust-colored; 6 green)') {
-      baseline[item.model_feature_name] = '0';
-      return;
-    }
-    if (item.model_feature_name === 'SmokingHistory') {
-      baseline[item.model_feature_name] = 'never';
-      return;
-    }
-    if (item.feature_type === 'boolean') {
-      baseline[item.model_feature_name] = 1;
-      return;
-    }
-    const seed = Number((index + 1 + (item.required ? 0.1 : 0.6)).toFixed(1));
-    baseline[item.model_feature_name] = seed;
-  });
-  return baseline;
-}
-
-function statusLabel(value?: string | null) {
-  if (!value) return '-';
-  switch (value) {
-    case 'ready_for_inference':
-      return '可用于模型评估';
-    case 'schema_unverified':
-      return '字段未通过校验';
-    case 'insufficient_data_for_assessment':
-      return '当前数据不足以判断';
-    case 'missing_required_features':
-      return '缺少必需字段';
-    case 'default_applied':
-      return '已应用默认策略';
-    case 'doctor_confirmation_required':
-      return '需要医生确认';
-    case 'validation_failed':
-      return '校验失败';
-    default:
-      return value;
-  }
-}
-
-function describeValidationFailureReason(reason: string) {
-  if (reason.startsWith('missing_required_features:')) {
-    return '缺少必需字段：' + reason.replace('missing_required_features:', '');
-  }
-  if (reason.startsWith('extra_raw_columns:')) {
-    return '存在多余字段：' + reason.replace('extra_raw_columns:', '');
-  }
-  if (reason.startsWith('duplicate_raw_columns:')) {
-    return '存在重复字段：' + reason.replace('duplicate_raw_columns:', '');
-  }
-  if (reason === 'artifact_order_mismatch') return '字段顺序与训练契约不一致';
-  if (reason === 'type_coercion_failed') return '字段类型转换失败';
-  if (reason === 'row_missing_required_feature_values') return '存在行内必需字段缺失';
-  if (reason === 'no_row_data_provided') return '未提供一行样例数据';
-  return reason;
-}
-
-function getBooleanOptions(item: ModelInputFeatureRequirement) {
-  if (item.model_feature_name === 'Striated_shadow.1') {
-    return [
-      { label: '存在', value: '1' },
-      { label: '不存在', value: '0' },
-      { label: '未知', value: 'unknown' },
-    ];
-  }
-  return [
-    { label: '是', value: '1' },
-    { label: '否', value: '0' },
-    { label: '未知', value: 'unknown' },
-  ];
-}
-
-function getCategoricalOptions(item: ModelInputFeatureRequirement) {
-  const allowed = item.value_range && typeof item.value_range === 'object' && Array.isArray((item.value_range as { allowed?: unknown[] }).allowed)
-    ? ((item.value_range as { allowed: unknown[] }).allowed as Array<string | number>)
-    : [];
-  if (item.model_feature_name === 'Sex') {
-    return [
-      { label: '男', value: 'male' },
-      { label: '女', value: 'female' },
-      { label: '未知', value: 'unknown' },
-    ];
-  }
-  if (item.model_feature_name === 'Dyspnea') {
-    return [
-      { label: '无', value: 'none' },
-      { label: '轻度', value: 'mild' },
-      { label: '中度', value: 'moderate' },
-      { label: '重度', value: 'severe' },
-      { label: '未知', value: 'unknown' },
-    ];
-  }
-  if (item.model_feature_name === 'Sputum production (0 none; 1 white; 2 yellow; 3 bloody; 4 not specified; 5 rust-colored; 6 green)') {
-    return [
-      { label: '0 无痰', value: '0' },
-      { label: '1 白痰', value: '1' },
-      { label: '2 黄痰', value: '2' },
-      { label: '3 血痰', value: '3' },
-      { label: '4 未说明', value: '4' },
-      { label: '5 铁锈色痰', value: '5' },
-      { label: '6 绿色痰', value: '6' },
-      { label: '未知', value: 'unknown' },
-    ];
-  }
-  if (item.model_feature_name === 'SmokingHistory') {
-    return [
-      { label: '从不', value: 'never' },
-      { label: '既往', value: 'former' },
-      { label: '当前', value: 'current' },
-      { label: '未知', value: 'unknown' },
-    ];
-  }
-  return allowed.map((value) => ({ label: String(value), value: String(value) }));
-}
-
-function coerceCsvValueForFeature(item: ModelInputFeatureRequirement, rawValue: string | number | null | undefined): SnapshotValue {
-  if (rawValue === null || rawValue === undefined) return null;
-  const normalized = String(rawValue).trim();
-  if (!normalized) return null;
-  if (item.feature_type === 'numeric') {
-    const numeric = Number(normalized);
-    return Number.isFinite(numeric) ? numeric : null;
-  }
-  if (item.feature_type === 'boolean') {
-    const lowered = normalized.toLowerCase();
-    if (['1', 'true', 'yes', '是', '存在'].includes(lowered)) return 1;
-    if (['0', 'false', 'no', '否', '不存在'].includes(lowered)) return 0;
-    if (['unknown', '未知'].includes(lowered)) return null;
-    return null;
-  }
-  if (item.model_feature_name === 'Sex') {
-    const lowered = normalized.toLowerCase();
-    if (['male', 'm', '1', '男'].includes(lowered)) return 'male';
-    if (['female', 'f', '0', '女'].includes(lowered)) return 'female';
-    return 'unknown';
-  }
-  if (item.model_feature_name === 'Dyspnea') {
-    const lowered = normalized.toLowerCase();
-    if (['none', '0', '无'].includes(lowered)) return 'none';
-    if (['mild', '1', '轻度'].includes(lowered)) return 'mild';
-    if (['moderate', '2', '中度'].includes(lowered)) return 'moderate';
-    if (['severe', '3', '重度'].includes(lowered)) return 'severe';
-    return 'unknown';
-  }
-  if (item.model_feature_name === 'Sputum production (0 none; 1 white; 2 yellow; 3 bloody; 4 not specified; 5 rust-colored; 6 green)') {
-    const lowered = normalized.toLowerCase();
-    if (['0', 'none', '无痰', '无'].includes(lowered)) return '0';
-    if (['1', 'white', '白痰'].includes(lowered)) return '1';
-    if (['2', 'yellow', '黄痰'].includes(lowered)) return '2';
-    if (['3', 'blood', '血痰'].includes(lowered)) return '3';
-    if (['4', 'not specified', '未说明'].includes(lowered)) return '4';
-    if (['5', 'rust-colored', '铁锈色痰'].includes(lowered)) return '5';
-    if (['6', 'green', '绿色痰'].includes(lowered)) return '6';
-    return 'unknown';
-  }
-  if (item.model_feature_name === 'SmokingHistory') {
-    const lowered = normalized.toLowerCase();
-    if (['never', '0', '从不'].includes(lowered)) return 'never';
-    if (['former', '1', '既往'].includes(lowered)) return 'former';
-    if (['current', '2', '当前'].includes(lowered)) return 'current';
-    return 'unknown';
-  }
-  return normalized;
-}
-
-function renderFeatureInput(item: ModelInputFeatureRequirement, value: SnapshotValue, onChange: (next: SnapshotValue) => void) {
-  if (item.feature_type === 'categorical') {
-    return (
-      <Select
-        style={{ width: '100%' }}
-        value={value === null || value === undefined ? undefined : String(value)}
-        onChange={(next) => onChange(String(next))}
-        options={getCategoricalOptions(item)}
-        placeholder='请选择'
-        allowClear
-      />
-    );
-  }
-  if (item.feature_type === 'boolean') {
-    const nextValue = value === 1 ? '1' : value === 0 ? '0' : value === 'unknown' ? 'unknown' : undefined;
-    return (
-      <Select
-        style={{ width: '100%' }}
-        value={nextValue}
-        onChange={(next) => onChange(next === '1' ? 1 : next === '0' ? 0 : null)}
-        options={getBooleanOptions(item)}
-        placeholder='请选择'
-        allowClear
-      />
-    );
-  }
-  return (
-    <InputNumber
-      value={typeof value === 'number' ? value : null}
-      onChange={(next) => onChange(typeof next === 'number' ? next : null)}
-      style={{ width: '100%' }}
-      placeholder='请输入数值'
-    />
-  );
-}
-
-export default function Page({ params }: { params: Promise<{ caseId: string }> }) {
+export default function ModelInputPage({ params }: { params: Promise<Params> }) {
   const { caseId } = use(params);
-  const [queryModelVersionId] = useState(() => {
-    if (typeof window === 'undefined') return '';
-    return new URLSearchParams(window.location.search).get('model_version_id') || '';
-  });
-  const [selectedVersionId, setSelectedVersionId] = useState('');
-  const [loadingPage, setLoadingPage] = useState(true);
-  const [selectionLoading, setSelectionLoading] = useState(false);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [pageError, setPageError] = useState('');
-  const [selectionError, setSelectionError] = useState('');
-  const [previewError, setPreviewError] = useState('');
-  const [caseRecord, setCaseRecord] = useState<CaseRecord | null>(null);
-  const [versionOptions, setVersionOptions] = useState<ModelVersionOption[]>([]);
-  const [schema, setSchema] = useState<ModelInputSchemaResponse | null>(null);
-  const [requirements, setRequirements] = useState<ModelInputFeatureRequirement[]>([]);
-  const [selectionPreview, setSelectionPreview] = useState<ModelSelectionPreviewResponse | null>(null);
-  const [previewResult, setPreviewResult] = useState<ModelInputPreviewItem | null>(null);
-  const [validationResult, setValidationResult] = useState<ModelInputPreviewItem | null>(null);
-  const [strictValidationResult, setStrictValidationResult] = useState<ClinicalTableStrictValidationResponseV1 | null>(null);
-  const [snapshotValues, setSnapshotValues] = useState<Record<string, SnapshotValue>>({});
-  const [snapshotTraceId, setSnapshotTraceId] = useState('');
-  const [snapshotValidationOnly, setSnapshotValidationOnly] = useState(false);
-  const [snapshotSubmitting, setSnapshotSubmitting] = useState(false);
-  const [validationLoading, setValidationLoading] = useState(false);
-  const [draftSavedAt, setDraftSavedAt] = useState('');
-  const [draftNotice, setDraftNotice] = useState('');
-  const [snapshotNotice, setSnapshotNotice] = useState('');
-  const [snapshotNoticeType, setSnapshotNoticeType] = useState<'success' | 'info' | 'warning' | 'error'>('info');
-  const [artifactCsvText, setArtifactCsvText] = useState('');
-  const [artifactCsvPreviewReady, setArtifactCsvPreviewReady] = useState(false);
-  const [entryMode, setEntryMode] = useState<'manual_entry' | 'csv_paste' | 'csv_upload_metadata'>('manual_entry');
-  const [snapshotRows, setSnapshotRows] = useState<ModelInputSnapshotSummaryItem[]>([]);
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [caseRecord, setCaseRecord] = useState<CaseItem | null>(null);
+  const [patient, setPatient] = useState<PatientItem | null>(null);
+  const [values, setValues] = useState<DraftValues>({});
+  const [validation, setValidation] = useState<ClinicalTableStrictValidationResponseV1 | null>(null);
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [validating, setValidating] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [csvText, setCsvText] = useState('');
+  const [csvPreview, setCsvPreview] = useState<CsvPreviewRow[]>([]);
+  const draftKey = 'medorion:capcop:clinical-draft:' + caseId;
 
-
-  useEffect(() => {
-    let active = true;
-
-    async function loadPage() {
-      setLoadingPage(true);
-      setPageError('');
-
-      try {
-        const [cases, registry] = await Promise.all([listCases(), listModels()]);
-        const currentCase = (cases as CaseRecord[]).find((item) => item.case_id === caseId) || null;
-        if (!currentCase) {
-          throw new Error('case_not_found');
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [cases, patients, snapshotList] = await Promise.all([listCases(), listPatients(), listModelInputSnapshotsByCase(caseId, undefined, 1, 0)]);
+      const foundCase = cases.find((item) => item.case_id === caseId) || null;
+      setCaseRecord(foundCase);
+      setPatient(patients.find((item) => item.patient_id === foundCase?.patient_id) || null);
+      const latestSnapshotId = snapshotList.items?.[0]?.input_snapshot_id || null;
+      if (latestSnapshotId) {
+        try {
+          const latestSnapshot = await getModelInputSnapshot(latestSnapshotId);
+          const nextValues = snapshotToValues(latestSnapshot);
+          setValues(nextValues);
+          try {
+            const refreshed = await validateClinicalTableInput(caseId, buildPayload(nextValues, 'manual_entry'));
+            setValidation(refreshed);
+            setMessage('已加载最新临床输入快照，系统已完成自动校验。');
+          } catch {
+            setValidation(null);
+            setMessage('已加载最新临床输入快照，但自动校验未通过，请检查字段。');
+          }
+        } catch {
+          const rawDraft = window.localStorage.getItem(draftKey);
+          if (rawDraft) setValues(JSON.parse(rawDraft) as DraftValues);
         }
-
-        const registryDetails = await Promise.all(
-          registry.items
-            .filter((item) => item.disease_agent === 'capcop_agent' || item.task_type === 'risk_assessment')
-            .map(async (item) => getModel(item.model_id))
-        );
-
-        const options = registryDetails.flatMap((model) =>
-          (model.versions || []).map((version) => ({
-            ...(version as ModelVersionOption),
-            model_name: model.model_name,
-            disease_agent: model.disease_agent,
-            task_type: model.task_type,
-            modality_scope: model.modality_scope,
-            owner_team: model.owner_team,
-            description: model.description,
-            is_active: model.is_active,
-          }))
-        ).filter((item) => item.model_input_schema_id === 'clinical_mlp_cap_cop_input_schema_v1' || item.disease_agent === 'capcop_agent');
-
-        if (options.length === 0) {
-          throw new Error('model_input_schema_not_found');
-        }
-
-        const preferredVersion = queryModelVersionId
-          || options.find((item) => item.model_input_schema_id === 'clinical_mlp_cap_cop_input_schema_v1')?.version_id
-          || options[0]?.version_id
-          || '';
-
-        setCaseRecord(currentCase);
-        setVersionOptions(options);
-        setSelectedVersionId(preferredVersion);
-      } catch (error) {
-        if (!active) return;
-        setPageError(translateError(error));
-      } finally {
-        if (active) setLoadingPage(false);
-      }
-    }
-
-    loadPage();
-    return () => {
-      active = false;
-    };
-  }, [caseId, queryModelVersionId]);
-
-  const selectedVersion = useMemo(
-    () => versionOptions.find((item) => item.version_id === selectedVersionId) || null,
-    [selectedVersionId, versionOptions],
-  );
-
-  useEffect(() => {
-    void (async () => {
-      if (caseRecord?.trace_id) {
-        setSnapshotTraceId(caseRecord.trace_id);
-        return;
-      }
-      setSnapshotTraceId((current) => current || 'trace_manual_snapshot_' + Date.now());
-    })();
-  }, [caseRecord?.trace_id]);
-
-  useEffect(() => {
-    void (async () => {
-      setSnapshotValues({});
-      setSnapshotValidationOnly(false);
-      setSnapshotNotice('');
-      setDraftNotice('');
-      setStrictValidationResult(null);
-      setPreviewResult(null);
-      setValidationResult(null);
-      setSelectionPreview(null);
-    })();
-  }, [selectedVersionId]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !caseId || !selectedVersionId) return;
-    const timer = window.setTimeout(() => {
-      try {
-        const draftKey = 'medorion:model-input:draft:' + caseId;
-        const raw = window.localStorage.getItem(draftKey);
-        if (!raw) return;
-        const draft = JSON.parse(raw) as {
-          selectedVersionId?: string;
-          snapshotValues?: Record<string, SnapshotValue>;
-          artifactCsvText?: string;
-          artifactCsvPreviewReady?: boolean;
-          snapshotTraceId?: string;
-          entryMode?: 'manual_entry' | 'csv_paste' | 'csv_upload_metadata';
-          savedAt?: string;
-        };
-        if (draft.selectedVersionId && draft.selectedVersionId !== selectedVersionId) return;
-        if (draft.snapshotValues) setSnapshotValues(draft.snapshotValues);
-        if (draft.artifactCsvText !== undefined) setArtifactCsvText(draft.artifactCsvText);
-        if (draft.artifactCsvPreviewReady !== undefined) setArtifactCsvPreviewReady(Boolean(draft.artifactCsvPreviewReady));
-        if (draft.snapshotTraceId !== undefined) setSnapshotTraceId(draft.snapshotTraceId);
-        if (draft.entryMode) setEntryMode(draft.entryMode);
-        if (draft.savedAt) setDraftSavedAt(draft.savedAt);
-        setDraftNotice('已恢复本地草稿。');
-      } catch {
-        setDraftNotice('草稿恢复失败，请重新录入。');
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [caseId, selectedVersionId]);
-
-  useEffect(() => {
-    let active = true;
-
-    async function loadSnapshots() {
-      setSnapshotLoading(true);
-      try {
-        const response = await listModelInputSnapshotsByCase(caseId);
-        if (!active) return;
-        setSnapshotRows(response.items || []);
-      } catch {
-        if (!active) return;
-        setSnapshotRows([]);
-        setSnapshotNoticeType('error');
-        setSnapshotNotice('输入快照列表加载失败，请稍后重试。');
-      } finally {
-        if (active) setSnapshotLoading(false);
-      }
-    }
-
-    loadSnapshots();
-    return () => {
-      active = false;
-    };
-  }, [caseId]);
-
-
-  useEffect(() => {
-    if (!caseRecord?.disease_task || versionOptions.length === 0) return;
-    const diseaseTask = caseRecord.disease_task || '';
-    let active = true;
-
-    async function loadSelectionPreview() {
-      setSelectionLoading(true);
-      setSelectionError('');
-      try {
-        const preview = await previewModelSelection(caseId, {
-          disease_task: diseaseTask,
-          candidate_model_version_ids: versionOptions.map((item) => item.version_id),
-        });
-        if (!active) return;
-        setSelectionPreview(preview);
-      } catch (error) {
-        if (!active) return;
-        setSelectionPreview(null);
-        setSelectionError(translateError(error));
-      } finally {
-        if (active) setSelectionLoading(false);
-      }
-    }
-
-    loadSelectionPreview();
-    return () => {
-      active = false;
-    };
-  }, [caseId, caseRecord?.disease_task, versionOptions]);
-
-  useEffect(() => {
-    if (!caseRecord?.disease_task || !selectedVersionId) return;
-    let active = true;
-
-    async function loadInputContract() {
-      setPreviewLoading(true);
-      setPreviewError('');
-      try {
-        const [schemaData, requirementsData] = await Promise.all([
-          getModelInputSchema(selectedVersionId),
-          getModelFeatureRequirements(selectedVersionId),
-        ]);
-        if (!active) return;
-        setSchema(schemaData);
-        setRequirements(requirementsData.feature_requirements || schemaData.feature_requirements || []);
-        setStrictValidationResult(null);
-        setPreviewResult(null);
-        setValidationResult(null);
-      } catch (error) {
-        if (!active) return;
-        setSchema(null);
-        setRequirements([]);
-        setStrictValidationResult(null);
-        setPreviewResult(null);
-        setValidationResult(null);
-        setPreviewError(translateError(error));
-      } finally {
-        if (active) setPreviewLoading(false);
-      }
-    }
-
-    loadInputContract();
-    return () => {
-      active = false;
-    };
-  }, [caseId, caseRecord?.disease_task, selectedVersionId]);
-
-  const featureRows = [...requirements].sort((left, right) => left.feature_order - right.feature_order);
-  const artifactCsvPreview = useMemo(() => parseCsvPreview(artifactCsvText), [artifactCsvText]);
-  const artifactCsvMappingRows = useMemo(() => {
-    const headers = artifactCsvPreview.headers;
-    const sampleRow = artifactCsvPreview.sampleRow;
-    return headers.map((header, index) => {
-      const normalizedHeader = normalizeContractToken(header);
-      const matchedRequirement = featureRows.find((item) => {
-        const featureMatch = normalizeContractToken(item.model_feature_name) === normalizedHeader;
-        const sourceMatch = normalizeContractToken(item.source_clinical_field || '') === normalizedHeader;
-        const labelMatch = normalizeContractToken(getFeatureDisplayName(item)) === normalizedHeader;
-        return featureMatch || sourceMatch || labelMatch;
-      }) || null;
-      const sampleValue = sampleRow[index] || '-';
-      const parsedValue = matchedRequirement ? coerceCsvValueForFeature(matchedRequirement, sampleValue) : null;
-      const status = matchedRequirement
-        ? parsedValue === null && String(sampleValue).trim() ? '格式待确认' : '已匹配'
-        : '未验证 / 不可用于模型';
-      return {
-        raw_column: header,
-        sample_value: sampleValue,
-        parsed_value: parsedValue === null || parsedValue === undefined ? '-' : String(parsedValue),
-        artifact_order: matchedRequirement ? matchedRequirement.feature_order : null,
-        target_feature: matchedRequirement ? matchedRequirement.model_feature_name : '-',
-        source_field: matchedRequirement ? (matchedRequirement.source_clinical_field || '-') : '-',
-        status,
-      };
-    });
-  }, [artifactCsvPreview.headers, artifactCsvPreview.sampleRow, featureRows]);
-  const providedFeatures = getProvidedFeatures(previewResult);
-  const missingFeatures = previewResult?.missing_features || validationResult?.missing_features || [];
-  const missingRequiredFeatures = previewResult?.missing_required_features || validationResult?.missing_required_features || [];
-  const doctorQuestions = getMissingRequiredQuestions(previewResult);
-  const defaultableFeatures = previewResult?.defaultable_features || validationResult?.defaultable_features || selectionPreview?.candidates.find((item) => item.model_version_id === selectedVersionId)?.defaultable_features || [];
-  const assessmentStatus = previewResult?.current_assessment_status || validationResult?.current_assessment_status || selectionPreview?.candidates.find((item) => item.model_version_id === selectedVersionId)?.current_assessment_status || '-';
-  const insufficientData = previewResult?.insufficient_data_for_assessment ?? validationResult?.insufficient_data_for_assessment ?? selectionPreview?.candidates.find((item) => item.model_version_id === selectedVersionId)?.insufficient_data_for_assessment ?? false;
-  const selectedCandidate = selectionPreview?.candidates.find((item) => item.model_version_id === selectedVersionId) || null;
-  const selectionRequired = selectionPreview?.selection_required ?? versionOptions.length > 1;
-  const selectionReason = selectionPreview?.selection_reason || (versionOptions.length > 1 ? 'multiple_candidates' : 'single_candidate');
-  const candidateCount = selectionPreview?.candidate_count ?? versionOptions.length;
-  const selectionRows: ModelSelectionCandidate[] = selectionPreview?.candidates || versionOptions.map((item) => ({
-    model_version_id: item.version_id,
-    model_id: item.model_id,
-    model_name: item.model_name,
-    version_label: item.version_label,
-    model_input_schema_id: item.model_input_schema_id || null,
-    model_input_schema_key: item.model_input_schema_key || null,
-    lifecycle_status: item.lifecycle_status || item.approval_state || null,
-    supported_modalities: item.supported_modalities || item.modality_scope,
-    feature_completeness: null,
-    missing_fields: [],
-    missing_required_features: [],
-    defaultable_features: [],
-    suitability_reason: null,
-    current_assessment_status: null,
-    insufficient_data_for_assessment: null,
-    runtime_stub: null,
-  }));
-
-  const snapshotProvidedFeatureNames = Object.entries(snapshotValues)
-    .filter(([, value]) => !isEmptySnapshotValue(value))
-    .map(([name]) => name);
-  const snapshotMissingRequiredFeatures = featureRows
-    .filter((item) => item.required && isEmptySnapshotValue(snapshotValues[item.model_feature_name]))
-    .map((item) => item.model_feature_name);
-  const snapshotArtifactComplete = snapshotProvidedFeatureNames.length === featureRows.length;
-  const snapshotAssessmentStatus = snapshotArtifactComplete && snapshotMissingRequiredFeatures.length === 0
-    ? 'ready_for_inference'
-    : 'insufficient_data_for_assessment';
-  const snapshotInsufficient = snapshotAssessmentStatus !== 'ready_for_inference';
-  const snapshotFeatureCount = featureRows.length;
-
-  async function handleFillValidationBaseline() {
-    setSnapshotValues(buildSyntheticBaseline(featureRows));
-    setSnapshotValidationOnly(true);
-    setEntryMode('manual_entry');
-    setSnapshotNoticeType('info');
-    setSnapshotNotice('已填充验证用示例值，请检查后再执行字段校验。');
-  }
-
-  function handleClearSnapshotValues() {
-    setSnapshotValues({});
-    setSnapshotValidationOnly(false);
-    setSnapshotNoticeType('info');
-    setSnapshotNotice('已清空特征输入。');
-  }
-
-  function buildClinicalTablePayload(): ClinicalTableStrictValidationRequestV1 {
-    const row = Object.fromEntries(
-      featureRows.map((item) => [item.model_feature_name, snapshotValues[item.model_feature_name] ?? null]),
-    ) as Record<string, unknown>;
-    return {
-      raw_columns: featureRows.map((item) => item.model_feature_name),
-      rows: [row],
-      sample_row: row,
-      source_type: entryMode,
-      not_for_diagnosis: true,
-      shadow_only: true,
-    };
-  }
-
-  function saveDraftToLocal() {
-    if (typeof window === 'undefined') return;
-    const draftKey = 'medorion:model-input:draft:' + caseId;
-    const draft = {
-      selectedVersionId,
-      snapshotValues,
-      artifactCsvText,
-      artifactCsvPreviewReady,
-      snapshotTraceId,
-      entryMode,
-      savedAt: new Date().toISOString(),
-    };
-    window.localStorage.setItem(draftKey, JSON.stringify(draft));
-    setDraftSavedAt(draft.savedAt);
-    setDraftNotice('草稿已保存到本地浏览器。');
-  }
-
-  async function handleSaveDraft() {
-    saveDraftToLocal();
-    setSnapshotNoticeType('info');
-    setSnapshotNotice('草稿已保存，可稍后继续填写。');
-  }
-
-  async function handleValidateClinicalTable() {
-    if (!selectedVersionId || !selectedVersion) {
-      setSnapshotNoticeType('error');
-      setSnapshotNotice('请选择模型版本后再执行字段校验。');
-      return;
-    }
-    if (!schema) {
-      setSnapshotNoticeType('error');
-      setSnapshotNotice('模型输入契约尚未加载，请稍后重试。');
-      return;
-    }
-    setValidationLoading(true);
-    setSnapshotNotice('');
-    try {
-      const payload = buildClinicalTablePayload();
-      const result = await validateClinicalTableInput(caseId, payload);
-      setStrictValidationResult(result);
-      const preview = buildPreviewItemFromStrictValidation(result, featureRows, selectedVersionId, caseRecord, schema);
-      setPreviewResult(preview);
-      setValidationResult(preview);
-      const reasonText = result.failure_reasons.length > 0 ? '；' + result.failure_reasons.map((item) => describeValidationFailureReason(item)).join('；') : '';
-      if (result.can_create_snapshot) {
-        setSnapshotNoticeType('success');
-        setSnapshotNotice('字段校验通过，可创建输入快照。');
       } else {
-        setSnapshotNoticeType('warning');
-        setSnapshotNotice('字段校验未通过：' + getStrictValidationStatusLabel(result.validation_status) + reasonText);
+        const rawDraft = window.localStorage.getItem(draftKey);
+        if (rawDraft) setValues(JSON.parse(rawDraft) as DraftValues);
       }
-    } catch (error) {
-      setStrictValidationResult(null);
-      setPreviewResult(null);
-      setValidationResult(null);
-      setSnapshotNoticeType('error');
-      setSnapshotNotice(translateError(error));
     } finally {
-      setValidationLoading(false);
+      setLoading(false);
     }
-  }
+  }, [caseId, draftKey]);
+  useEffect(() => { const timer = window.setTimeout(() => { void load(); }, 0); return () => window.clearTimeout(timer); }, [load]);
 
-  async function handleCreateSnapshot() {
-    if (!selectedVersionId || !selectedVersion) {
-      setSnapshotNoticeType('error');
-      setSnapshotNotice('请选择模型版本后再创建输入快照。');
-      return;
-    }
-    if (!schema) {
-      setSnapshotNoticeType('error');
-      setSnapshotNotice('模型输入契约尚未加载，请稍后重试。');
-      return;
-    }
-    if (!strictValidationResult) {
-      setSnapshotNoticeType('error');
-      setSnapshotNotice('请先执行字段校验，再创建输入快照。');
-      return;
-    }
-    if (!strictValidationResult.can_create_snapshot) {
-      setSnapshotNoticeType('warning');
-      setSnapshotNotice('当前输入还不能创建快照，请先补齐缺失字段并通过校验。');
-      return;
-    }
-    setSnapshotSubmitting(true);
-    setSnapshotNotice('');
-    try {
-      const payload: ClinicalTableControlledSnapshotCreateRequestV1 = {
-        ...buildClinicalTablePayload(),
-        trace_id: snapshotTraceId || caseRecord?.trace_id || 'trace_manual_snapshot_' + Date.now(),
-      };
-      const created: ClinicalTableControlledSnapshotCreateResponseV1 = await createClinicalTableSnapshotFromValidation(caseId, payload);
-      if (created.snapshot_created && created.snapshot?.input_snapshot_id) {
-        setSnapshotNoticeType('success');
-        setSnapshotNotice('输入快照已创建：' + created.snapshot.input_snapshot_id + '；输入已锁定，可用于后续模型评估流程。');
-      } else {
-        setSnapshotNoticeType('warning');
-        setSnapshotNotice('输入快照未创建：' + (created.failure_reasons.join('；') || '请检查字段顺序和类型。'));
-      }
-      const response = await listModelInputSnapshotsByCase(caseId);
-      setSnapshotRows(response.items || []);
-    } catch (error) {
-      setSnapshotNoticeType('error');
-      setSnapshotNotice(translateError(error));
-    } finally {
-      setSnapshotSubmitting(false);
-    }
-  }
+  const updateValue = (field: FieldDefinition, value: number | string | null) => { setValues((prev) => ({ ...prev, [field.model]: value })); setValidation(null); };
+  const saveDraft = () => { window.localStorage.setItem(draftKey, JSON.stringify(values)); setMessage('草稿已保存到本机浏览器，不写入数据库。'); };
+  const validate = async () => { setValidating(true); setMessage(''); try { const result = await validateClinicalTableInput(caseId, buildPayload(values, 'manual_entry')); setValidation(result); setMessage(result.can_create_snapshot ? '字段校验通过，可以创建输入快照。' : '字段校验未通过，请根据表格状态修正。'); } catch (error) { setMessage(formatApiErrorMessage(error, '字段校验失败，请稍后重试。')); } finally { setValidating(false); } };
+  const createSnapshot = async () => { setCreating(true); setMessage(''); try { const result = await createClinicalTableSnapshotFromValidation(caseId, { ...buildPayload(values, 'manual_entry'), trace_id: caseRecord?.trace_id || null }); const nextMessage = result.snapshot_created ? '输入快照已创建，可进入模型评估。' : '未创建输入快照：' + (result.failure_reasons || []).join('、'); await load(); setMessage(nextMessage); } catch (error) { setMessage(formatApiErrorMessage(error, '创建输入快照失败，请稍后重试。')); } finally { setCreating(false); } };
+  const previewCsv = () => { const lines = csvText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean); if (lines.length < 2) { setCsvPreview([]); return; } const columns = parseCsvLine(lines[0]); const firstRow = parseCsvLine(lines[1]); setCsvPreview(columns.map((column, index) => { const match = matchColumn(column); const rawValue = firstRow[index] || ''; return { key: column + index, rawColumn: column, targetFeature: match?.model || null, rawValue, parsedValue: rawValue ? parseNumberLike(rawValue) : null, status: match ? (rawValue ? 'matched' : 'empty') : 'unmatched' }; })); };
+  const applyCsv = () => { const next = { ...values }; for (const row of csvPreview) { if (row.targetFeature && row.parsedValue !== null && row.parsedValue !== '') next[row.targetFeature] = row.parsedValue; } setValues(next); setValidation(null); setDrawerOpen(false); setMessage('CSV 第一行样例已应用到表格，请重新字段校验。'); };
+  const rows = useMemo(() => FIELDS.map((field) => { const check = fieldValidation(field.model, validation); const hasValue = values[field.model] !== undefined && values[field.model] !== null && values[field.model] !== ''; return { ...field, value: values[field.model], check, hasValue }; }), [validation, values]);
 
-  async function copySnapshotId(snapshotId: string) {
-    try {
-      await navigator.clipboard.writeText(snapshotId);
-      setSnapshotNoticeType('success');
-      setSnapshotNotice('已复制 snapshot_id：' + snapshotId);
-    } catch {
-      setSnapshotNoticeType('error');
-      setSnapshotNotice('复制失败，请手动复制 snapshot_id。');
-    }
-  }
-
-  if (loadingPage) {
-    return (
-      <div style={{ minHeight: 240, display: 'grid', placeItems: 'center' }}>
-        <Spin spinning>
-          <div style={{ width: 320, height: 80 }} />
-        </Spin>
-      </div>
-    );
-  }
-
-  if (pageError) {
-    return (
-      <Space direction='vertical' size={16} style={{ width: '100%' }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>模型输入预览</Typography.Title>
-        <Alert type='error' showIcon message={pageError} description='请先返回病例列表，确认病例与模型注册数据可用。' />
-        <Space wrap>
-          <Button type='primary' href='/cases'>返回病例列表</Button>
-          <Button href='/dashboard'>返回工作台</Button>
-        </Space>
-      </Space>
-    );
-  }
+  const columns = [
+    { title: '序号', dataIndex: 'order', width: 72, fixed: 'left' as const },
+    { title: '中文字段', dataIndex: 'label', width: 240, fixed: 'left' as const, render: (value: string, row: FieldDefinition) => <Space direction='vertical' size={0}><Space size={8}><Typography.Text strong>{value}</Typography.Text>{row.model === 'Striated_shadow.1' ? <Tag color='orange'>保留字段</Tag> : null}</Space><Typography.Text type='secondary' style={{ fontSize: 12 }} copyable>{row.model}</Typography.Text></Space> },
+    { title: '值', width: 260, render: (_: unknown, row: FieldDefinition & { value?: number | string | null }) => { if (row.type === 'binary') return <Select allowClear placeholder='请选择' value={row.value as number | undefined} style={{ width: 170 }} onChange={(value) => updateValue(row, value ?? null)} options={[{ label: '是', value: 1 }, { label: '否', value: 0 }]} />; if (row.type === 'coded_sputum') return <Select allowClear placeholder='请选择' value={row.value as number | undefined} style={{ width: 220 }} onChange={(value) => updateValue(row, value ?? null)} options={[{ label: '0 无痰', value: 0 }, { label: '1 白痰', value: 1 }, { label: '2 黄痰', value: 2 }, { label: '3 血痰', value: 3 }, { label: '4 未说明', value: 4 }, { label: '5 铁锈色痰', value: 5 }, { label: '6 绿色痰', value: 6 }]} />; return <InputNumber placeholder='输入数值' value={typeof row.value === 'number' ? row.value : null} style={{ width: 170 }} onChange={(value) => updateValue(row, value)} />; } },
+    { title: '状态', width: 180, render: (_: unknown, row: FieldDefinition & { check: ClinicalTableStrictFeatureMappingItemV1 | null; hasValue: boolean }) => row.check ? <Tag color={row.check.coercion_status === 'ok' ? 'green' : row.check.coercion_status === 'missing' ? 'red' : 'orange'}>{row.check.message || row.check.coercion_status}</Tag> : <Tag color={row.hasValue ? 'blue' : 'default'}>{row.hasValue ? '已填写' : '待填写'}</Tag> },
+  ];
 
   return (
-    <Space direction='vertical' size={16} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-      <Typography.Title level={4} style={{ margin: 0 }}>模型输入预览</Typography.Title>
-      <Typography.Text type='secondary'>病例：{caseId}{caseRecord?.case_no ? ' · ' + caseRecord.case_no : ''}</Typography.Text>
-
-      <Alert
-        type='info'
-        showIcon
-        message='当前仅做模型输入预览与规则校验'
-        description='本页只展示病例数据映射到模型输入 schema 后的预览和校验结果。LLM 或前端参数不能绕过 required feature 校验，也不能 silent fallback。'
-      />
-      <Alert
-        type='warning'
-        showIcon
-        message='字段契约待复核'
-        description='当前 36 个前端输入字段尚未确认等同于 fold5 真实训练输入。CAP/COP 原表与当前输入 schema 存在字段差异，Sex 等字段编码未验证。请勿将当前校验结果理解为可靠模型评估。'
-        style={{ marginTop: 16 }}
-      />
-
-      <Card title='病例上下文' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }} extra={caseRecord?.trace_id ? <Link href={'/cases/' + caseId + '/lineage?trace_id=' + encodeURIComponent(caseRecord.trace_id)}>查看溯源</Link> : null}>
-        <Descriptions bordered size='small' column={2}>
-          <Descriptions.Item label='病种任务'>{caseRecord?.disease_task || '-'}</Descriptions.Item>
-          <Descriptions.Item label='Trace / 溯源 ID'>{caseRecord?.trace_id || '-'}</Descriptions.Item>
-          <Descriptions.Item label='病例编号'>{caseRecord?.case_no || '-'}</Descriptions.Item>
-          <Descriptions.Item label='主诉'>{caseRecord?.chief_complaint || '-'}</Descriptions.Item>
-        </Descriptions>
-      </Card>
-
-      <Card title='候选模型与模型选择预览' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-        <Spin spinning={selectionLoading}>
-          <Space direction='vertical' size={12} style={{ width: '100%' }}>
-            {selectionError ? <Alert type='error' showIcon message={selectionError} /> : null}
-            <Alert
-              type={selectionRequired ? 'warning' : 'success'}
-              showIcon
-              message={selectionRequired ? '多模型候选，需要模型选择预览' : '单模型候选，不做模型选择，只做输入校验'}
-              description={selectionRequired ? '当前病种任务下存在多个候选模型，系统先给出候选匹配结果，再做输入规则校验。' : '当前只存在单个候选模型，系统不会做模型选择。'}
-            />
-            <Descriptions bordered size='small' column={3}>
-              <Descriptions.Item label='病种任务'>{selectionPreview?.disease_task || caseRecord?.disease_task || '-'}</Descriptions.Item>
-              <Descriptions.Item label='是否需要模型选择'>{selectionRequired ? '是' : '否'}</Descriptions.Item>
-              <Descriptions.Item label='选择原因'>{selectionReason || '-'}</Descriptions.Item>
-              <Descriptions.Item label='候选模型数'>{candidateCount}</Descriptions.Item>
-              <Descriptions.Item label='当前候选'>{selectedCandidate ? selectedCandidate.model_name + ' / ' + selectedCandidate.version_label : '-'}</Descriptions.Item>
-              <Descriptions.Item label='选中模型版本 ID'>{selectedCandidate?.model_version_id || selectedVersionId || '-'}</Descriptions.Item>
-            </Descriptions>
-            <Table
-              rowKey='model_version_id'
-              pagination={false}
-              dataSource={selectionRows}
-              scroll={{ x: 'max-content' }}
-              columns={[
-                { title: '模型名称', dataIndex: 'model_name' },
-                { title: '版本', dataIndex: 'version_label' },
-                { title: '模型版本 ID', dataIndex: 'model_version_id' },
-                { title: '生命周期', dataIndex: 'lifecycle_status', render: (value: string) => value || '-' },
-                { title: '支持模态', dataIndex: 'supported_modalities', render: (value: string[]) => renderTags(value, 'blue') },
-                { title: '特征覆盖率', dataIndex: 'feature_completeness', render: (value: number | null | undefined) => (typeof value === 'number' ? value.toFixed(2) : '-') },
-                { title: '缺少的必需特征', dataIndex: 'missing_required_features', render: (value: string[]) => renderTags(value, 'red') },
-                { title: '可默认特征', dataIndex: 'defaultable_features', render: (value: string[]) => renderTags(value, 'green') },
-                { title: '当前评估状态', dataIndex: 'current_assessment_status', render: (value: string) => value || '-' },
-              ]}
-            />
-          </Space>
-        </Spin>
-      </Card>
-
-      <Card title='模型输入契约' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }} extra={<Space wrap><Tag color='orange'>字段待校验</Tag><Select style={{ width: 420 }} value={selectedVersionId} options={versionOptions.map((item) => ({ value: item.version_id, label: item.model_name + ' · ' + item.version_label + ' · ' + item.version_id.slice(0, 8) }))} onChange={(value) => setSelectedVersionId(String(value))} />{selectedVersion ? <Tag color='blue'>{selectedVersion.model_name}</Tag> : null}<Tag color='geekblue'>{selectedVersionId}</Tag></Space>}>
-        <Descriptions bordered size='small' column={3}>
-          <Descriptions.Item label='病种任务特征集'>{schema?.disease_task_feature_set_name || schema?.disease_task_feature_set_key || '-'}</Descriptions.Item>
-          <Descriptions.Item label='模型输入 schema'>{schema?.model_input_schema_name || schema?.model_input_schema_key || '-'}</Descriptions.Item>
-          <Descriptions.Item label='特征数'>{schema?.feature_count ?? featureRows.length ?? 0}</Descriptions.Item>
-          <Descriptions.Item label='必需数'>{requirements.filter((item) => item.required).length}</Descriptions.Item>
-          <Descriptions.Item label='可默认数'>{requirements.filter((item) => item.defaultable).length}</Descriptions.Item>
-          <Descriptions.Item label='支持模态'>{renderTags(schema?.supported_modalities, 'blue')}</Descriptions.Item>
-          <Descriptions.Item label='支持病种'>{renderTags(schema?.supported_disease_tasks, 'purple')}</Descriptions.Item>
-          <Descriptions.Item label='预处理制品引用'>{schema?.preprocess_artifact_ref || '-'}</Descriptions.Item>
-          <Descriptions.Item label='生命周期'>{schema?.lifecycle_status || '-'}</Descriptions.Item>
-        </Descriptions>
-        <div style={{ marginTop: 16 }}>
-          <Alert
-            type='info'
-            showIcon
-            message='CAP/COP 临床 MLP 输入说明'
-            description='cap_cop_clinical_feature_set_v1 是训练时的 36 个 CAP/COP 模型输入特征；原始脱敏 CSV 里还保留 Height、Weight、BMI、Hospitalization_duration 等原表字段，它们不等于当前 36-feature schema。Sex / Dyspnea / SmokingHistory 属于模型输入字段，本页按 schema 类型展示为选择控件；Sex 的训练编码待与训练 schema 复核。下一步需要按 clinical_tabular_standardization_v1.json 的 36 列顺序重建/核对前端字段。在完成 preprocess artifact 对齐前，当前页面只作为输入链路演示。不要用当前输入结果做医学判断。'
-          />
+    <main style={{ padding: 24, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+      <CaseSubNav caseId={caseId} patientName={patient?.display_name || undefined} patientId={patient?.external_patient_id || patient?.patient_id} caseNo={caseRecord?.case_no} />
+      <Space direction='vertical' size={16} style={{ width: '100%' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <Space direction='vertical' size={4}><Typography.Title level={3} style={{ margin: 0 }}>临床输入</Typography.Title><Typography.Text type='secondary'>按训练 artifact 的 36 字段顺序录入，先校验再建快照。</Typography.Text></Space>
+          <Space wrap><Tag color={statusColor(validation?.validation_status)}>{statusText(validation?.validation_status)}</Tag><Tag color='gold'>院内录入，结果仅用于模型评估</Tag></Space>
         </div>
-        <div style={{ marginTop: 16 }}>
-          <Table
-            rowKey='model_feature_name'
-            pagination={false}
-            dataSource={featureRows}
-            scroll={{ x: 'max-content' }}
-            columns={[
-              { title: '顺序', dataIndex: 'feature_order', width: 80 },
-              {
-                title: '字段说明',
-                dataIndex: 'model_feature_name',
-                width: 260,
-                render: (_: string, item: ModelInputFeatureRequirement) => (
-                  <Space direction='vertical' size={2}>
-                    <Typography.Text strong>{getFeatureDisplayName(item)}</Typography.Text>
-                    <Typography.Text type='secondary' style={{ fontSize: 12 }}>模型字段：{item.model_feature_name}</Typography.Text>
-                    <Typography.Text type='secondary' style={{ fontSize: 12 }}>原表字段：{getSourceFieldDisplayName(item)}</Typography.Text>
-                    <Space wrap size={6}>
-                      <Tag color={getFieldSourceStatusColor(getFieldSourceStatus(item))}>{getFieldSourceStatusLabel(getFieldSourceStatus(item))}</Tag>
-                      {item.model_feature_name === 'Sex' ? <Tag color='gold'>CSV/artifact 未确认</Tag> : null}
-                      {item.model_feature_name === 'Sex' ? <Tag color='orange'>编码未验证</Tag> : null}
-                      {item.model_feature_name === 'Sex' ? <Tag color='gold'>性别编码待与训练 schema 复核</Tag> : null}
-                      {item.model_feature_name === 'Striated_shadow.1' ? <Tag color='orange'>历史 schema 保留字段</Tag> : null}
-                    </Space>
-                  </Space>
-                ),
-              },
-              { title: '类型', dataIndex: 'feature_type', width: 120, render: (_: string, item: ModelInputFeatureRequirement) => <Tag>{getFeatureTypeLabel(item)}</Tag> },
-              { title: '字段来源状态', width: 170, render: (_: unknown, item: ModelInputFeatureRequirement) => <Tag color={getFieldSourceStatusColor(getFieldSourceStatus(item))}>{getFieldSourceStatusLabel(getFieldSourceStatus(item))}</Tag> },
-              { title: '原表字段', dataIndex: 'source_clinical_field', width: 180 },
-              { title: '必需', dataIndex: 'required', width: 100, render: (value: boolean) => renderFeatureBool(value) },
-              { title: '可默认', dataIndex: 'defaultable', width: 110, render: (value: boolean) => renderFeatureBool(value) },
-              { title: '缺失处理', dataIndex: 'missing_value_policy', render: (value: string | null | undefined) => value || '-' },
-              { title: '默认处理', dataIndex: 'default_strategy', render: (value: string | null | undefined) => value || '-' },
-              { title: '单位', dataIndex: 'unit', render: (value: string | null | undefined) => value || '-' },
-              { title: '说明', dataIndex: 'notes', render: (value: string | null | undefined) => value || '-' },
-              {
-                title: '输入控件 / 提交值',
-                width: 180,
-                render: (_: unknown, item: ModelInputFeatureRequirement) => (
-                  <Space wrap size={6}>
-                    <Tag color={item.feature_type === 'numeric' ? 'blue' : item.feature_type === 'boolean' ? 'green' : 'purple'}>
-                      {item.feature_type === 'numeric' ? '数值' : item.feature_type === 'boolean' ? '二值' : item.feature_type === 'categorical' ? '分类' : '待确认'}
-                    </Tag>
-                    {item.model_feature_name === 'Sex' ? <Tag color='geekblue'>男/女</Tag> : null}
-                    {item.model_feature_name === 'Striated_shadow.1' ? <Tag color='orange'>历史保留</Tag> : null}
-                  </Space>
-                ),
-              },
-            ]}
-          />
-        </div>
-      </Card>
-
-
-      <Card
-        title='临床表格输入契约 / artifact-order 映射'
-        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
-      >
-        <Space direction='vertical' size={12} style={{ width: '100%' }}>
-          <Alert
-            type='warning'
-            showIcon
-            message='临床表格字段必须先映射到训练 artifact 的 36-feature order'
-            description='原始临床表格字段、CSV 列顺序、产品表单顺序和 case_model_input_snapshot 的 key 顺序都不能直接当作模型输入。只有把每个字段明确映射到 artifact 顺序后，snapshot 才能进入可用状态；否则保持“待校验 / 数据不足”。缺失字段不能 silent fallback，默认值也不能自动补齐后继续推理。'
-          />
-          <Descriptions bordered size='small' column={2}>
-            <Descriptions.Item label='原始临床表格字段'>CSV / 手工录入 / 导入粘贴的源列名</Descriptions.Item>
-            <Descriptions.Item label='训练 artifact 36-feature order'>按 feature_order 排列的训练输入顺序</Descriptions.Item>
-            <Descriptions.Item label='Snapshot'>case_model_input_snapshot，仅保存映射后的输入快照</Descriptions.Item>
-            <Descriptions.Item label='当前状态'>待校验</Descriptions.Item>
-          </Descriptions>
-          <Alert
-            type='info'
-            showIcon
-            message='CSV 粘贴 / 导入只做表头与样例行解析'
-            description='下面的输入框只解析表头和第一行样例值，不会直接创建可推理 snapshot。系统会显示每个原始列名映射到哪个 36-feature，以及是否已验证。未映射字段会标记为“未验证 / 不可用于模型”。'
-          />
-          <Input.TextArea
-            value={artifactCsvText}
-            onChange={(event) => { setArtifactCsvText(event.target.value); setArtifactCsvPreviewReady(false); }}
-            placeholder={'粘贴 CSV 表头与一行样例，例如：\nAge,Sex,Temperature\n68,male,37.2'}
-            autoSize={{ minRows: 4, maxRows: 10 }}
-          />
-          <Space wrap>
-            <Button type='primary' onClick={() => setArtifactCsvPreviewReady(true)} disabled={!artifactCsvText.trim()}>解析 CSV 表头</Button>
-            <Button onClick={() => { setArtifactCsvText(''); setArtifactCsvPreviewReady(false); }}>清空</Button>
-          </Space>
-          <Typography.Text type='secondary'>
-            这里只做契约预览：原始列名 → 训练 artifact 顺序 → snapshot。未验证字段不会自动进入模型输入。
-          </Typography.Text>
-          {artifactCsvText.trim() ? (
-            <Table
-              rowKey='raw_column'
-              pagination={false}
-              size='small'
-              scroll={{ x: 'max-content' }}
-              dataSource={artifactCsvPreviewReady ? artifactCsvMappingRows : []}
-              locale={{ emptyText: artifactCsvPreviewReady ? '暂无可解析列，请检查 CSV 文本' : '点击“解析 CSV 表头”后查看映射结果' }}
-              columns={[
-                { title: '原始列名', dataIndex: 'raw_column', width: 220 },
-                { title: '原始值', dataIndex: 'sample_value', width: 160 },
-                { title: '解析值', dataIndex: 'parsed_value', width: 160 },
-                { title: '目标 feature', dataIndex: 'target_feature', width: 180 },
-                { title: 'artifact 顺序', dataIndex: 'artifact_order', width: 120, render: (value: number | null) => (value === null ? '-' : value) },
-                { title: '映射状态', dataIndex: 'status', width: 180, render: (value: string) => <Tag color={value === '已匹配' ? 'green' : value === '格式待确认' ? 'orange' : 'red'}>{value}</Tag> },
-                { title: '映射说明', dataIndex: 'source_field', render: (value: string) => value || '-' },
-              ]}
-            />
-          ) : null}
+        {message ? <Alert type={validation?.can_create_snapshot ? 'success' : 'info'} showIcon message={message} /> : null}
+        <WorkspaceTableShell title='CAP/COP 临床表格字段' subtitle='一页只保留这一张主表，滚动都在窗口内。' actions={<Space wrap><Button onClick={() => setDrawerOpen(true)}>CSV 导入</Button><Button onClick={saveDraft}>保存草稿</Button><Button loading={validating} type='primary' onClick={validate}>字段校验</Button><Button loading={creating} disabled={!validation?.can_create_snapshot} onClick={createSnapshot}>创建输入快照</Button></Space>} minHeight={560}>
+          <Table rowKey='model' size='small' loading={loading} columns={columns} dataSource={rows} pagination={false} sticky scroll={{ x: 980, y: 'calc(100vh - 330px)' }} />
+        </WorkspaceTableShell>
+      </Space>
+      <Drawer title='CSV 导入预览' width={760} open={drawerOpen} onClose={() => setDrawerOpen(false)} extra={<Space><Button onClick={previewCsv}>解析预览</Button><Button type='primary' disabled={csvPreview.length === 0} onClick={applyCsv}>应用到表格</Button></Space>}>
+        <Space direction='vertical' size={16} style={{ width: '100%' }}>
+          <Alert type='info' showIcon message='CSV 只用于字段映射和值解析预览，不会直接创建输入快照。' />
+          <Input.TextArea rows={8} value={csvText} onChange={(event) => setCsvText(event.target.value)} placeholder={'粘贴表头和第一行样例，例如：\nAge,Height,Weight,Cough,' + SPUTUM_FIELD + '\n68,170,65,1,2'} />
+          <Table rowKey='key' size='small' pagination={false} columns={[{ title: '原始列名', dataIndex: 'rawColumn', width: 180, fixed: 'left' as const }, { title: '匹配字段', dataIndex: 'targetFeature', width: 260, render: (value: string | null) => value ? <Typography.Text type='secondary'>{FIELD_BY_MODEL.get(value)?.label} / {value}</Typography.Text> : <Tag color='red'>未匹配</Tag> }, { title: '原始值', dataIndex: 'rawValue', width: 140 }, { title: '解析后值', dataIndex: 'parsedValue', width: 140, render: (value: unknown) => value === null || value === undefined ? '-' : String(value) }, { title: '状态', dataIndex: 'status', width: 120, render: (value: CsvPreviewRow['status']) => <Tag color={value === 'matched' ? 'green' : value === 'empty' ? 'orange' : 'red'}>{value === 'matched' ? '可应用' : value === 'empty' ? '空值' : '未匹配'}</Tag> }]} dataSource={csvPreview} sticky scroll={{ x: 900, y: 360 }} />
         </Space>
-      </Card>
-
-      <Card
-        title='手工录入 CAP/COP 特征并创建输入快照'
-        extra={
-          <Space wrap size={6}>
-            <Tag color='orange'>待校验</Tag>
-            <Tag color='red'>非诊断</Tag>
-            <Tag color='orange'>测试/开发记录</Tag>
-            <Tag color={snapshotValidationOnly ? 'geekblue' : 'default'}>{snapshotValidationOnly ? '仅验证示例' : '手工录入'}</Tag>
-          </Space>
-        }
-        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
-      >
-        <Space direction='vertical' size={12} style={{ width: '100%' }}>
-          <Alert
-            type='info'
-            showIcon
-            message='这里录入的是 CAP/COP clinical MLP 的模型输入特征，不是病例基础信息。'
-            description='创建输入快照只保留输入 provenance，不会运行模型。保存后如果状态达到 ready_for_inference，才可以进入后续评估入口。'
-          />
-          {snapshotNotice ? <Alert type={snapshotNoticeType} showIcon message={snapshotNotice} /> : null}
-          {draftNotice ? <Alert type='info' showIcon message={draftNotice} /> : null}
-          <Typography.Text type='secondary'>最近保存：{draftSavedAt || '-'}</Typography.Text>
-          <Descriptions bordered size='small' column={3}>
-            <Descriptions.Item label='Trace / 溯源 ID'>
-              <Input
-                value={snapshotTraceId}
-                onChange={(event) => setSnapshotTraceId(event.target.value)}
-                placeholder='trace_manual_snapshot_...'
-              />
-            </Descriptions.Item>
-            <Descriptions.Item label='模型版本 ID'>{selectedVersionId || '-'}</Descriptions.Item>
-            <Descriptions.Item label='特征数'>{snapshotFeatureCount}</Descriptions.Item>
-            <Descriptions.Item label='校验状态'>{snapshotAssessmentStatus}</Descriptions.Item>
-            <Descriptions.Item label='当前评估状态'>{snapshotAssessmentStatus}</Descriptions.Item>
-            <Descriptions.Item label='数据不足'>{snapshotInsufficient ? '是' : '否'}</Descriptions.Item>
-          </Descriptions>
-          <Space wrap>
-            <Button type='primary' onClick={handleFillValidationBaseline} disabled={featureRows.length === 0}>填充验证用示例值</Button>
-            <Button onClick={handleClearSnapshotValues}>清空</Button>
-            <Button onClick={handleSaveDraft}>保存草稿</Button>
-            <Button type='primary' onClick={handleValidateClinicalTable} loading={validationLoading} disabled={!selectedVersionId || featureRows.length === 0}>字段校验</Button>
-            <Button type='primary' onClick={handleCreateSnapshot} loading={snapshotSubmitting} disabled={!selectedVersionId || featureRows.length === 0 || !strictValidationResult?.can_create_snapshot}>
-              创建输入快照
-            </Button>
-          </Space>
-          <Typography.Text type='secondary'>
-            当前已填：{snapshotProvidedFeatureNames.length} / {snapshotFeatureCount}。先保存草稿，再做字段校验；只有校验通过后才能创建输入快照。
-          </Typography.Text>
-          {strictValidationResult ? (
-            <Card size='small' style={{ width: '100%' }} title='字段校验结果' extra={<Tag color={getStrictValidationStatusColor(strictValidationResult.validation_status)}>{getStrictValidationStatusLabel(strictValidationResult.validation_status)}</Tag>}>
-              <Descriptions bordered size='small' column={3}>
-                <Descriptions.Item label='artifact ID'>{strictValidationResult.artifact_id}</Descriptions.Item>
-                <Descriptions.Item label='artifact 顺序匹配'>{strictValidationResult.order_matches_artifact ? '是' : '否'}</Descriptions.Item>
-                <Descriptions.Item label='可创建输入快照'>{strictValidationResult.can_create_snapshot ? '是' : '否'}</Descriptions.Item>
-                <Descriptions.Item label='缺少必需特征'>{renderTags(strictValidationResult.missing_required_features, 'red')}</Descriptions.Item>
-                <Descriptions.Item label='多余原始列' span={2}>{renderTags(strictValidationResult.extra_raw_columns, 'gold')}</Descriptions.Item>
-                <Descriptions.Item label='失败原因' span={3}>{strictValidationResult.failure_reasons.length ? strictValidationResult.failure_reasons.map((item) => <Tag key={item} color='orange'>{describeValidationFailureReason(item)}</Tag>) : '-'}</Descriptions.Item>
-              </Descriptions>
-            </Card>
-          ) : null}
-          <Space wrap size={6}>
-            <Tag color='orange'>待校验</Tag>
-            <Tag color='red'>非诊断</Tag>
-            <Tag color='red'>仅作输入演示</Tag>
-            <Tag color='orange'>概率未校准</Tag>
-            <Tag color='gold'>需要医生复核</Tag>
-          </Space>
-          <Table
-            rowKey='model_feature_name'
-            pagination={false}
-            loading={previewLoading}
-            dataSource={featureRows}
-            scroll={{ x: 'max-content', y: 520 }}
-            columns={[
-              { title: '顺序', dataIndex: 'feature_order', width: 80 },
-              {
-                title: '字段说明',
-                dataIndex: 'model_feature_name',
-                width: 260,
-                render: (_: string, item: ModelInputFeatureRequirement) => (
-                  <Space direction='vertical' size={2}>
-                    <Typography.Text strong>{getFeatureDisplayName(item)}</Typography.Text>
-                    <Typography.Text type='secondary' style={{ fontSize: 12 }}>模型字段：{item.model_feature_name}</Typography.Text>
-                    <Typography.Text type='secondary' style={{ fontSize: 12 }}>原表字段：{getSourceFieldDisplayName(item)}</Typography.Text>
-                    <Space wrap size={6}>
-                      <Tag color={getFieldSourceStatusColor(getFieldSourceStatus(item))}>{getFieldSourceStatusLabel(getFieldSourceStatus(item))}</Tag>
-                      {item.model_feature_name === 'Sex' ? <Tag color='gold'>CSV/artifact 未确认</Tag> : null}
-                      {item.model_feature_name === 'Sex' ? <Tag color='orange'>编码未验证</Tag> : null}
-                      {item.model_feature_name === 'Sex' ? <Tag color='gold'>性别编码待与训练 schema 复核</Tag> : null}
-                      {item.model_feature_name === 'Striated_shadow.1' ? <Tag color='orange'>历史 schema 保留字段</Tag> : null}
-                    </Space>
-                  </Space>
-                ),
-              },
-              { title: '原表字段', dataIndex: 'source_clinical_field', width: 180 },
-              { title: '类型', dataIndex: 'feature_type', width: 120, render: (_: string, item: ModelInputFeatureRequirement) => <Tag>{getFeatureTypeLabel(item)}</Tag> },
-              { title: '字段来源状态', width: 170, render: (_: unknown, item: ModelInputFeatureRequirement) => <Tag color={getFieldSourceStatusColor(getFieldSourceStatus(item))}>{getFieldSourceStatusLabel(getFieldSourceStatus(item))}</Tag> },
-              { title: '必需', dataIndex: 'required', width: 100, render: (value: boolean) => (value ? <Tag color='red'>必需</Tag> : <Tag>可选</Tag>) },
-              { title: '可默认', dataIndex: 'defaultable', width: 110, render: (value: boolean) => (value ? <Tag color='green'>可默认</Tag> : <Tag>不可默认</Tag>) },
-              { title: '缺失处理', dataIndex: 'missing_value_policy', width: 180, render: (value: string | null | undefined) => value || '-' },
-              { title: '单位', dataIndex: 'unit', width: 100, render: (value: string | null | undefined) => value || '-' },
-              { title: '说明', dataIndex: 'notes', width: 260, render: (value: string | null | undefined) => value || '-' },
-              {
-                title: '输入值',
-                width: 180,
-                fixed: 'right',
-                render: (_: unknown, item: ModelInputFeatureRequirement) => (
-                  <div style={{ minWidth: 150 }}>
-                    {renderFeatureInput(item, snapshotValues[item.model_feature_name] ?? null, (next) => {
-                      setSnapshotValues((current) => ({
-                        ...current,
-                        [item.model_feature_name]: next,
-                      }));
-                    })}
-                  </div>
-                ),
-              },
-            ]}
-          />
-        </Space>
-      </Card>      <Card title='已创建的输入快照' extra={<Tag color='blue'>输入快照列表</Tag>} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-        <Space direction='vertical' size={12} style={{ width: '100%' }}>
-          <Alert
-            type='info'
-            showIcon
-            message='输入快照只保存已经通过校验的字段映射'
-            description='快照会保留病例级 Trace、模型版本、字段映射和来源信息；未通过校验的输入不能直接进入快照。这里不写诊断、不补默认值、不触发模型。'
-          />
-          {snapshotNotice ? <Alert type={snapshotNoticeType} showIcon message={snapshotNotice} /> : null}
-          <Table
-            rowKey='input_snapshot_id'
-            loading={snapshotLoading}
-            pagination={false}
-            dataSource={snapshotRows}
-            locale={{ emptyText: '暂无输入快照' }}
-            scroll={{ x: 'max-content' }}
-            columns={[
-              { title: '输入快照 ID', dataIndex: 'input_snapshot_id', width: 220 },
-              { title: 'Trace / 溯源 ID', dataIndex: 'trace_id', width: 200 },
-              { title: '模型版本 ID', dataIndex: 'model_version_id', width: 220 },
-              { title: '校验状态', dataIndex: 'validation_status', width: 160, render: (value: string) => statusLabel(value) },
-              { title: '当前评估状态', dataIndex: 'current_assessment_status', width: 180, render: (value: string) => statusLabel(value) },
-              { title: '数据不足', dataIndex: 'insufficient_data_for_assessment', width: 120, render: (value: boolean) => (value ? <Tag color='orange'>是</Tag> : <Tag color='green'>否</Tag>) },
-              { title: '已映射特征数', dataIndex: 'mapped_feature_count', width: 140 },
-              { title: '缺失特征数', dataIndex: 'missing_feature_count', width: 140 },
-              { title: '创建时间', dataIndex: 'created_at', width: 220, render: (value: string | null | undefined) => value || '-' },
-              {
-                title: '操作',
-                width: 180,
-                fixed: 'right',
-                render: (_: unknown, item: ModelInputSnapshotSummaryItem) => (
-                  <Space wrap size={8}>
-                    <Button type='link' onClick={() => copySnapshotId(item.input_snapshot_id)}>复制 snapshot_id</Button>
-                  </Space>
-                ),
-              },
-            ]}
-          />
-        </Space>
-      </Card>
-
-      <Row gutter={16} style={{ width: '100%', maxWidth: '100%' }}>
-        <Col xs={24} lg={12} style={{ minWidth: 0 }}>
-          <Card title='模型输入预览' style={{ minWidth: 0, width: '100%', maxWidth: '100%' }} extra={<Space wrap><Tag color='blue'>模型版本 ID：{selectedVersionId || '-'}</Tag></Space>}>
-            <Spin spinning={previewLoading}>
-              <Space direction='vertical' size={12} style={{ width: '100%' }}>
-                {previewError ? <Alert type='error' showIcon message={previewError} /> : null}
-                <Descriptions bordered size='small' column={2}>
-                  <Descriptions.Item label='当前评估状态'>{assessmentStatus}</Descriptions.Item>
-                  <Descriptions.Item label='数据不足'>{insufficientData ? '当前数据不足以判断' : '否'}</Descriptions.Item>
-                  <Descriptions.Item label='缺少的必需特征'>{renderTags(missingRequiredFeatures, 'red')}</Descriptions.Item>
-                  <Descriptions.Item label='可默认特征'>{renderTags(defaultableFeatures, 'green')}</Descriptions.Item>
-                  <Descriptions.Item label='缺失特征' span={2}>{renderTags(missingFeatures, 'gold')}</Descriptions.Item>
-                  <Descriptions.Item label='已提供特征' span={2}>{renderTags(providedFeatures, 'blue')}</Descriptions.Item>
-                  <Descriptions.Item label='建议医生问题' span={2}>{doctorQuestions.length ? <Space direction='vertical' size={4}>{doctorQuestions.map((item) => <Tag key={item} color='geekblue'>{item}</Tag>)}</Space> : '-'}</Descriptions.Item>
-                </Descriptions>
-              </Space>
-            </Spin>
-          </Card>
-        </Col>
-        <Col xs={24} lg={12} style={{ minWidth: 0 }}>
-          <Card title='模型输入校验' style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>
-            <Spin spinning={previewLoading}>
-              <Space direction='vertical' size={12} style={{ width: '100%' }}>
-                <Descriptions bordered size='small' column={2}>
-                  <Descriptions.Item label='当前评估状态'>{validationResult?.current_assessment_status || '-'}</Descriptions.Item>
-                  <Descriptions.Item label='数据不足'>{validationResult?.insufficient_data_for_assessment ? '当前数据不足以判断' : '否'}</Descriptions.Item>
-                  <Descriptions.Item label='缺少的必需特征'>{renderTags(validationResult?.missing_required_features || [], 'red')}</Descriptions.Item>
-                  <Descriptions.Item label='可默认特征'>{renderTags(validationResult?.defaultable_features || [], 'green')}</Descriptions.Item>
-                  <Descriptions.Item label='缺失特征' span={2}>{renderTags(validationResult?.missing_features || [], 'gold')}</Descriptions.Item>
-                  <Descriptions.Item label='已提供特征' span={2}>{renderTags(getProvidedFeatures(validationResult), 'blue')}</Descriptions.Item>
-                  <Descriptions.Item label='建议医生问题' span={2}>{getMissingRequiredQuestions(validationResult).length ? <Space direction='vertical' size={4}>{getMissingRequiredQuestions(validationResult).map((item) => <Tag key={item} color='geekblue'>{item}</Tag>)}</Space> : '-'}</Descriptions.Item>
-                </Descriptions>
-              </Space>
-            </Spin>
-          </Card>
-        </Col>
-      </Row>
-
-      <Card title='使用说明 / 下一步' style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-        <Space direction='vertical' size={8}>
-          <Typography.Text>1. 手工录入区和 CSV 契约区都必须最终映射到训练 artifact 的 36-feature order。2. 创建输入快照时，只有 36 个字段全部明确且 required feature 不缺失，才能进入可用状态。3. 保存草稿只会记录本地浏览器草稿，不会影响病例数据。4. 字段校验会调用后端严格校验接口，帮助确认哪些字段可以进入输入快照。5. 输入快照只保存映射后的输入，不会直接运行模型。6. disease_task_feature_set 是病种任务特征集合，不是全局病例表结构。7. 缺少 required feature 时不能 silent fallback，只能走缺失值咨询、明确默认策略或保持数据不足。8. 原始临床表格字段、CSV 列顺序和 snapshot key 顺序不能直接当作模型输入。9. LLM 和前端参数不能绕过后端模型输入校验。</Typography.Text>
-        </Space>
-      </Card>
-    </Space>
+      </Drawer>
+    </main>
   );
 }
-
-
-

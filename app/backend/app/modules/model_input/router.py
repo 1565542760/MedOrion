@@ -228,7 +228,16 @@ def _assessment_item(schema_item: ModelInputSchemaItemV1, provided_features: dic
         mapped_features[key] = value
 
     default_strategy_available = bool(defaultable_features)
-    if missing_required_features and not default_strategy_available:
+    allow_training_time_missing_value_imputation = schema_item.model_input_schema_id == 'clinical_mlp_cap_cop_input_schema_v1'
+    if missing_required_features and allow_training_time_missing_value_imputation and mapped_features:
+        current_status = 'ready_for_inference'
+        insufficient = False
+        requires_doctor_confirmation = False
+    elif missing_required_features and allow_training_time_missing_value_imputation:
+        current_status = 'insufficient_data_for_assessment'
+        insufficient = True
+        requires_doctor_confirmation = False
+    elif missing_required_features and not default_strategy_available:
         current_status = 'insufficient_data_for_assessment'
         insufficient = True
         requires_doctor_confirmation = False
@@ -969,6 +978,8 @@ def _build_strict_clinical_table_validation(
         if coercion_status == 'missing':
             has_missing = True
 
+    has_any_mapped = any(item.coercion_status == 'ok' for item in feature_mappings)
+
     if duplicate_columns:
         failure_reasons.append('duplicate_raw_columns:' + ','.join(duplicate_columns))
     if extra_raw_columns:
@@ -981,8 +992,12 @@ def _build_strict_clinical_table_validation(
         failure_reasons.append('type_coercion_failed')
     if has_missing and not missing_required_features and row_count > 0:
         failure_reasons.append('row_missing_required_feature_values')
+    if has_missing and not has_any_mapped and row_count > 0:
+        failure_reasons.append('row_all_values_missing')
 
     if missing_required_features:
+        validation_status = 'insufficient_data_for_assessment'
+    elif has_missing and not has_any_mapped and row_count > 0:
         validation_status = 'insufficient_data_for_assessment'
     elif duplicate_columns or extra_raw_columns or not order_matches_artifact or has_type_error or row_count == 0:
         validation_status = 'schema_unverified'
@@ -1007,8 +1022,7 @@ def _build_strict_clinical_table_validation(
 def _strict_clinical_table_snapshot_mapped_features(feature_mappings: list[ClinicalTableStrictFeatureMappingItemV1]) -> dict[str, Any]:
     mapped: dict[str, Any] = {}
     for item in feature_mappings:
-        if item.coercion_status == 'ok':
-            mapped[item.model_feature_name] = item.coerced_value
+        mapped[item.model_feature_name] = item.coerced_value if item.coercion_status == 'ok' else None
     return mapped
 
 

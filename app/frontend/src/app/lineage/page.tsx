@@ -1,14 +1,23 @@
-'use client';
+﻿'use client';
 
-import CaseEntryLanding from '@/components/CaseEntryLanding';
+import Link from 'next/link';
+import { Card, Space, Typography } from 'antd';
 
 export default function Page() {
   return (
-    <CaseEntryLanding
-      title={'\u6eaf\u6e90\u5165\u53e3'}
-      subtitle={'\u6eaf\u6e90\u9700\u8981\u75c5\u4f8b\u4e0a\u4e0b\u6587\uff0c\u8bf7\u5148\u9009\u62e9\u75c5\u4f8b\u3002'}
-      note={'\u8bf7\u5148\u8fdb\u5165\u75c5\u4f8b\u5217\u8868\u9009\u62e9\u75c5\u4f8b\uff0c\u7136\u540e\u5728\u75c5\u4f8b\u8be6\u60c5\u9875\u67e5\u770b trace\u3001evidence \u548c\u8840\u7f18\u94fe\u3002'}
-      bullets={['\u6eaf\u6e90\u7684\u4e3b\u5de5\u4f5c\u533a\u5728 /cases/{case_id}/lineage\u3002', '\u53ef\u4ee5\u4ece\u53cd\u9988\u3001\u7f3a\u5931\u503c\u54a8\u8be2\u548c\u8d28\u63a7\u5ba1\u67e5\u8df3\u56de\u6765\u3002', '\u5f53\u524d\u53ea\u5c55\u793a\u5ba1\u9605\u7528\u7684\u8bc1\u636e\u94fe\u548c\u8840\u7f18\u4fe1\u606f\u3002']}
-    />
+    <main style={{ padding: 24, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+      <Space direction='vertical' size={16} style={{ width: '100%' }}>
+        <Space direction='vertical' size={4}>
+          <Typography.Title level={3} style={{ margin: 0 }}>溯源</Typography.Title>
+          <Typography.Text type='secondary'>溯源视图以病例上下文为准，不占主导航主位。</Typography.Text>
+        </Space>
+        <Card title='入口说明'>
+          <Space direction='vertical' size={8}>
+            <Typography.Text>请先进入具体病例，在病例页内查看 trace、evidence 和血缘链。</Typography.Text>
+            <Link href='/cases'>去患者/病例列表</Link>
+          </Space>
+        </Card>
+      </Space>
+    </main>
   );
 }

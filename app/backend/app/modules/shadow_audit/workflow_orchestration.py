@@ -95,11 +95,11 @@ def _failed(branch: str, code: str, message: str | None = None):
     return _item(branch, 'failed', disabled=reasons, limitations=_limits(False) + [code])
 
 
-def _clinical(db: Session, case_id: str, actor: User, trace_id: str | None, dry_run_label: str | None):
-    snapshot = _latest_ready_multimodal_snapshot(db, _uuid(case_id, 'invalid_case_id', 'Invalid case id'))
+def _clinical(db: Session, case_id: str, actor: User, trace_id: str | None, dry_run_label: str | None, execution_id: str | None = None):
+    snapshot = _latest_ready_snapshot(db, _uuid(case_id, 'invalid_case_id', 'Invalid case id'))
     if snapshot is None:
         return _failed('clinical_mlp', 'clinical_snapshot_not_ready', 'No ready clinical snapshot was found')
-    result = run_cap_cop_clinical_mlp_fold5_one_shot_shadow(db, case_id, actor, SimpleNamespace(input_snapshot_id=snapshot.input_snapshot_id, trace_id=trace_id or snapshot.trace_id, dry_run_label=dry_run_label, skip_input_assessment=True))
+    result = run_cap_cop_clinical_mlp_fold5_one_shot_shadow(db, case_id, actor, SimpleNamespace(input_snapshot_id=snapshot.input_snapshot_id, trace_id=trace_id or snapshot.trace_id, dry_run_label=dry_run_label, skip_input_assessment=False, execution_id=execution_id))
     output = result.outputs[0] if result.outputs else None
     candidate, probabilities, limitations = _output(output)
     if output is None and result.run.status == 'shadow_success':
@@ -107,12 +107,12 @@ def _clinical(db: Session, case_id: str, actor: User, trace_id: str | None, dry_
     return _item('clinical_mlp', 'executed' if result.run.status == 'shadow_success' else 'failed', run_id=result.run.shadow_run_id, output_id=getattr(output, 'output_id', None) if output is not None else None, candidate=candidate, probabilities=probabilities, disabled=[] if result.run.status == 'shadow_success' else [str(result.run.error_code or 'clinical_branch_failed')], limitations=limitations or _limits(False))
 
 
-def _imaging(db: Session, case_id: str, actor: User, trace_id: str | None, dry_run_label: str | None):
+def _imaging(db: Session, case_id: str, actor: User, trace_id: str | None, dry_run_label: str | None, execution_id: str | None = None):
     case_uuid = _uuid(case_id, 'invalid_case_id', 'Invalid case id')
     input_row = _latest_ready_imaging(db, case_uuid)
     if input_row is None:
         return _failed('imaging_resnet18', 'imaging_input_not_ready', 'No ready imaging input was found')
-    result = run_controlled_imaging_resnet18_one_shot_shadow(db, case_id, actor, ControlledShadowImagingResNet18OneShotRequestV1(input_asset_id=input_row.input_asset_id, trace_id=trace_id or input_row.trace_id, dry_run_label=dry_run_label, enable_real_shadow=True, not_for_diagnosis=True, runtime_stub=True, execution_mode='metadata_only_stub'))
+    result = run_controlled_imaging_resnet18_one_shot_shadow(db, case_id, actor, SimpleNamespace(input_asset_id=input_row.input_asset_id, trace_id=trace_id or input_row.trace_id, dry_run_label=dry_run_label, enable_real_shadow=True, not_for_diagnosis=True, runtime_stub=True, execution_mode='metadata_only_stub', execution_id=execution_id))
     output = result.outputs[0] if result.outputs else None
     candidate, probabilities, limitations = _output(output)
     if output is None and result.status == 'shadow_success':
@@ -120,7 +120,7 @@ def _imaging(db: Session, case_id: str, actor: User, trace_id: str | None, dry_r
     return _item('imaging_resnet18', 'executed' if result.status == 'shadow_success' else 'failed', run_id=result.shadow_run_id, output_id=getattr(output, 'output_id', None) if output is not None else None, candidate=candidate, probabilities=probabilities, disabled=[] if result.status == 'shadow_success' else [str(result.error_code or 'imaging_branch_failed')], limitations=limitations or _limits(False))
 
 
-def _multimodal(db: Session, case_id: str, actor: User, trace_id: str | None, dry_run_label: str | None):
+def _multimodal(db: Session, case_id: str, actor: User, trace_id: str | None, dry_run_label: str | None, execution_id: str | None = None):
     case_uuid = _uuid(case_id, 'invalid_case_id', 'Invalid case id')
     snapshot = _latest_ready_multimodal_snapshot(db, case_uuid)
     imaging_row = _latest_ready_imaging(db, case_uuid)
@@ -131,7 +131,7 @@ def _multimodal(db: Session, case_id: str, actor: User, trace_id: str | None, dr
     contract = _multimodal_clinical_payload_contract(snapshot)
     if not contract['ready']:
         return _item('multimodal_resnet18', 'skipped', disabled=list(contract['disabled_reasons'] or ['clinical_input_insufficient']), limitations=_limits(False))
-    result = run_controlled_multimodal_resnet18_one_shot_shadow(db, case_id, actor, ControlledShadowMultimodalResNet18OneShotRequestV1(input_asset_id=imaging_row.input_asset_id, input_snapshot_id=snapshot.input_snapshot_id, trace_id=trace_id or snapshot.trace_id or imaging_row.trace_id, dry_run_label=dry_run_label, enable_real_shadow=True, not_for_diagnosis=True, runtime_stub=True, execution_mode='metadata_only_stub'))
+    result = run_controlled_multimodal_resnet18_one_shot_shadow(db, case_id, actor, SimpleNamespace(input_asset_id=imaging_row.input_asset_id, input_snapshot_id=snapshot.input_snapshot_id, trace_id=trace_id or snapshot.trace_id or imaging_row.trace_id, dry_run_label=dry_run_label, enable_real_shadow=True, not_for_diagnosis=True, runtime_stub=True, execution_mode='metadata_only_stub', execution_id=execution_id))
     output = result.outputs[0] if result.outputs else None
     candidate, probabilities, limitations = _output(output)
     if output is None and result.status == 'shadow_success':
@@ -148,6 +148,7 @@ def run_cap_cop_shadow_workflow(db: Session, case_id: str, actor: User, payload:
     if str(getattr(payload, 'mode', 'preview')) == 'preview':
         return {'workflow_run_id': workflow_run_id, 'mode': 'preview', 'overall_status': readiness['overall_status'], 'case_id': str(case.id), 'patient_id': str(case.patient_id), 'branches': [_planned(branch, readiness['branches'][branch], branch in requested) for branch in BRANCHES], 'checked_at': checked_at, 'limitations': _limits(True)}
     require_case_access(db, actor, str(case_uuid), access_level='detail')
+    workflow_execution_id = f'exec_{uuid4().hex[:16]}'
     branches = []
     for branch in BRANCHES:
         if branch not in requested:
@@ -159,7 +160,7 @@ def run_cap_cop_shadow_workflow(db: Session, case_id: str, actor: User, payload:
             continue
         handler = {'clinical_mlp': _clinical, 'imaging_resnet18': _imaging, 'multimodal_resnet18': _multimodal}[branch]
         try:
-            branches.append(handler(db, case_id, actor, getattr(payload, 'trace_id', None), getattr(payload, 'dry_run_label', None)))
+            branches.append(handler(db, case_id, actor, getattr(payload, 'trace_id', None), getattr(payload, 'dry_run_label', None), workflow_execution_id))
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
             code = str(detail.get('code') or 'branch_execution_failed')

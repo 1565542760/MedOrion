@@ -1,9 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { Alert, Button, Card, Form, Input, Space, Typography } from 'antd';
-import { useAuth } from '@/components/AuthProvider';
+import { getCurrentUser, login as apiLogin } from '@/lib/api';
 
 type ApiError = {
   response?: {
@@ -17,54 +16,114 @@ type ApiError = {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, isAuthenticated } = useAuth();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (isAuthenticated) {
-      router.replace('/dashboard');
-    }
-  }, [isAuthenticated, router]);
+    let active = true;
+    void getCurrentUser()
+      .then(() => {
+        if (!active) return;
+        router.replace('/dashboard');
+      })
+      .catch(() => {
+        if (!active) return;
+        setReady(true);
+      });
 
-  async function onFinish(values: { username: string; password: string }) {
+    return () => {
+      active = false;
+    };
+  }, [router]);
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setSubmitting(true);
     setError('');
     try {
-      await login(values.username, values.password);
+      await apiLogin(username.trim(), password);
       router.replace('/dashboard');
     } catch (e: unknown) {
       const code = (e as ApiError)?.response?.data?.detail?.code;
       if (code === 'invalid_credentials') {
-        setError('登录失败：用户名或密码错误');
+        setError('用户名或密码错误，请重试。');
       } else if (code === 'auth_storage_not_ready') {
-        setError('登录失败：认证服务暂不可用');
+        setError('本地认证存储尚未就绪，请刷新后重试。');
       } else {
-        setError('登录失败：请稍后重试');
+        setError('登录失败，请稍后重试。');
       }
     } finally {
       setSubmitting(false);
     }
   }
 
+  if (!ready) {
+    return (
+      <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#f3f6fb', color: '#334155' }}>
+        <div style={{ fontSize: 14 }}>正在检查登录状态...</div>
+      </main>
+    );
+  }
+
   return (
-    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 16 }}>
-      <Card style={{ width: 420 }}>
-        <Space direction='vertical' size={16} style={{ width: '100%' }}>
-          <Typography.Title level={4} style={{ margin: 0 }}>登录</Typography.Title>
-          <Typography.Text type='secondary'>开发环境最小登录入口（非生产公网登录）。</Typography.Text>
-          {error ? <Alert type='error' showIcon message={error} /> : null}
-          <Form layout='vertical' onFinish={onFinish}>
-            <Form.Item label='用户名' name='username' rules={[{ required: true, message: '请输入用户名' }]}>
-              <Input autoComplete='username' />
-            </Form.Item>
-            <Form.Item label='密码' name='password' rules={[{ required: true, message: '请输入密码' }]}>
-              <Input.Password autoComplete='current-password' />
-            </Form.Item>
-            <Button type='primary' htmlType='submit' loading={submitting} block>登录</Button>
-          </Form>
-        </Space>
-      </Card>
-    </div>
+    <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f3f6fb' }}>
+      <section style={{ width: '100%', maxWidth: 440, background: '#fff', borderRadius: 16, boxShadow: '0 12px 40px rgba(15, 23, 42, 0.12)', padding: 28, border: '1px solid #e5e7eb' }}>
+        <form onSubmit={onSubmit} style={{ display: 'grid', gap: 16 }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 24, lineHeight: 1.3, color: '#0f172a' }}>登录</h1>
+            <p style={{ margin: '8px 0 0', color: '#64748b', fontSize: 14 }}>开发环境最小登录入口（非生产公网登录）。</p>
+          </div>
+
+          {error ? (
+            <div style={{ border: '1px solid #fecaca', background: '#fef2f2', color: '#991b1b', borderRadius: 10, padding: '10px 12px', fontSize: 14 }}>
+              {error}
+            </div>
+          ) : null}
+
+          <label style={{ display: 'grid', gap: 8, fontSize: 14, color: '#0f172a' }}>
+            <span>用户名</span>
+            <input
+              autoComplete='username'
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder='请输入用户名'
+              style={{ height: 42, borderRadius: 10, border: '1px solid #cbd5e1', padding: '0 12px', fontSize: 14, color: '#0f172a', background: '#fff', outline: 'none' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: 8, fontSize: 14, color: '#0f172a' }}>
+            <span>密码</span>
+            <input
+              autoComplete='current-password'
+              type='password'
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder='请输入密码'
+              style={{ height: 42, borderRadius: 10, border: '1px solid #cbd5e1', padding: '0 12px', fontSize: 14, color: '#0f172a', background: '#fff', outline: 'none' }}
+            />
+          </label>
+
+          <button
+            type='submit'
+            disabled={submitting}
+            style={{
+              height: 44,
+              border: 'none',
+              borderRadius: 10,
+              background: submitting ? '#93c5fd' : '#2563eb',
+              color: '#fff',
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: submitting ? 'not-allowed' : 'pointer'
+            }}
+          >
+            {submitting ? '正在登录...' : '登录'}
+          </button>
+        </form>
+      </section>
+    </main>
   );
 }

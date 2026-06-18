@@ -132,7 +132,7 @@ MODEL_INPUT_SCHEMA_PROFILES: dict[str, dict[str, Any]] = {
         'lifecycle_status': 'default',
         'model_family': 'clinical_mlp',
         'preprocess_artifact_ref': 'metadata-only://cap_cop/clinical_mlp/preprocess/v1',
-        'limitations': ['metadata_only', 'no_model_loaded', 'no_live_inference'],
+        'limitations': ['metadata_only', 'no_model_loaded', 'no_live_inference', 'training_time_median_imputation'],
         'feature_requirements': CAP_COP_CLINICAL_FEATURES,
     },
     'multimodal_resnet18_cap_cop_input_schema_v1': {
